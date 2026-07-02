@@ -15,6 +15,8 @@ from .config import get_settings
 SCANS = "scans"
 LEAVE_ARTIST = "leave_artist"
 LEAVE_ISRC = "leave_isrc"
+MA_ACQUISITIONS = "ma_acquisitions"
+MA_SCANS = "ma_scans"
 
 
 class Database:
@@ -56,6 +58,61 @@ class Database:
         for rec in records:
             col.add(rec)
         return len(records)
+
+    # ---- M&A Acquisitions --------------------------------------------------
+
+    def create_acquisition(self, acq: dict) -> None:
+        self._fs.collection(MA_ACQUISITIONS).document(acq["id"]).set(acq)
+
+    def get_acquisition(self, acq_id: str) -> dict | None:
+        doc = self._fs.collection(MA_ACQUISITIONS).document(acq_id).get()
+        return doc.to_dict() if doc.exists else None
+
+    def list_acquisitions(self) -> list[dict]:
+        docs = (
+            self._fs.collection(MA_ACQUISITIONS)
+            .order_by("created_at", direction="DESCENDING")
+            .stream()
+        )
+        return [d.to_dict() for d in docs]
+
+    def update_acquisition(self, acq_id: str, fields: dict) -> None:
+        self._fs.collection(MA_ACQUISITIONS).document(acq_id).update(fields)
+
+    def delete_acquisition(self, acq_id: str) -> bool:
+        ref = self._fs.collection(MA_ACQUISITIONS).document(acq_id)
+        if not ref.get().exists:
+            return False
+        ref.delete()
+        return True
+
+    # ---- M&A Scans ---------------------------------------------------------
+
+    def create_ma_scan(self, scan: dict) -> None:
+        self._fs.collection(MA_SCANS).document(scan["id"]).set(scan)
+
+    def get_ma_scan(self, scan_id: str) -> dict | None:
+        doc = self._fs.collection(MA_SCANS).document(scan_id).get()
+        return doc.to_dict() if doc.exists else None
+
+    def list_ma_scans_for_acquisition(self, acq_id: str) -> list[dict]:
+        docs = (
+            self._fs.collection(MA_SCANS)
+            .where("acquisition_id", "==", acq_id)
+            .order_by("created_at", direction="ASCENDING")
+            .stream()
+        )
+        return [d.to_dict() for d in docs]
+
+    def update_ma_scan(self, scan_id: str, fields: dict) -> None:
+        self._fs.collection(MA_SCANS).document(scan_id).update(fields)
+
+    def delete_ma_scan(self, scan_id: str) -> bool:
+        ref = self._fs.collection(MA_SCANS).document(scan_id)
+        if not ref.get().exists:
+            return False
+        ref.delete()
+        return True
 
 
 _db: Database | None = None

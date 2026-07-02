@@ -50,6 +50,49 @@ export interface ScanDetail {
   results: Results;
 }
 
+// ---- M&A Audit types -------------------------------------------------------
+
+export type MASeverity = "BLOCKER" | "HIGH" | "MEDIUM" | "LOW" | "INFO";
+
+export interface MAFinding {
+  id: string;
+  sheet: string;
+  field: string;
+  check_type: string;
+  title: string;
+  finding: string;
+  why_it_matters: string;
+  detail: Record<string, unknown>;
+  severity: MASeverity | null;
+  dismissed: boolean;
+  _severity_hint: MASeverity;
+}
+
+export interface MAScan {
+  id: string;
+  acquisition_id: string;
+  filename: string;
+  created_at: string;
+  updated_at: string;
+  uploaded_by: string;
+  sheets_scanned: string[];
+  total_findings: number;
+  reviewed_count: number;
+  dismissed_count: number;
+  sheet_stats: Record<string, { rows: number; columns: string[]; findings: number }>;
+}
+
+export interface MAAcquisition {
+  id: string;
+  name: string;
+  company: string;
+  status: "Active" | "On Hold" | "Closed" | "Passed";
+  created_at: string;
+  updated_at: string;
+  created_by: string;
+  scan_ids: string[];
+}
+
 export interface AppConfig {
   authEnabled: boolean;
   oauthClientId: string;

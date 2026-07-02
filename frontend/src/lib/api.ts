@@ -1,4 +1,4 @@
-import type { AppConfig, AppUser, Scan, ScanDetail } from "./types";
+import type { AppConfig, AppUser, MAAcquisition, MAFinding, MAScan, Scan, ScanDetail } from "./types";
 
 // The auth layer injects the current Google ID token here so every request
 // carries it. Kept module-level so non-React code (downloads) can read it too.
@@ -63,6 +63,61 @@ export const api = {
     postJson<ScanDetail>(`/api/scans/${id}/corrections/missing`, { fills }),
   applyFormat: (id: string, cell_corrections: unknown[], split_rows: unknown[]) =>
     postJson<ScanDetail>(`/api/scans/${id}/corrections/format`, { cell_corrections, split_rows }),
+
+  // ---- M&A Audit ----------------------------------------------------------
+  listAcquisitions: () =>
+    request<{ acquisitions: MAAcquisition[] }>("/api/ma/acquisitions"),
+
+  createAcquisition: (name: string, company: string) =>
+    postJson<MAAcquisition>("/api/ma/acquisitions", { name, company }),
+
+  getAcquisition: (id: string) =>
+    request<{ acquisition: MAAcquisition; scans: MAScan[] }>(`/api/ma/acquisitions/${id}`),
+
+  updateAcquisition: (id: string, fields: Partial<Pick<MAAcquisition, "name" | "company" | "status">>) =>
+    request<MAAcquisition>(`/api/ma/acquisitions/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(fields),
+    }),
+
+  deleteAcquisition: (id: string) =>
+    request<{ deleted: string }>(`/api/ma/acquisitions/${id}`, { method: "DELETE" }),
+
+  uploadMAScan: (acqId: string, file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return request<{ scan: MAScan; findings: MAFinding[] }>(
+      `/api/ma/acquisitions/${acqId}/scans`,
+      { method: "POST", body: form },
+    );
+  },
+
+  getMAScan: (scanId: string) =>
+    request<{ scan: MAScan; findings: MAFinding[] }>(`/api/ma/scans/${scanId}`),
+
+  reviewFindings: (scanId: string, updates: { id: string; severity?: string | null; dismissed?: boolean }[]) =>
+    postJson<{ findings: MAFinding[] }>(`/api/ma/scans/${scanId}/findings`, { updates }),
+
+  deleteMAScan: (acqId: string, scanId: string) =>
+    request<{ deleted: string }>(`/api/ma/acquisitions/${acqId}/scans/${scanId}`, { method: "DELETE" }),
+
+  downloadMAReport: async (acqId: string, acqName: string) => {
+    const headers = new Headers();
+    if (authToken) headers.set("Authorization", `Bearer ${authToken}`);
+    const res = await fetch(`/api/ma/acquisitions/${acqId}/report`, { method: "POST", headers });
+    if (!res.ok) throw new ApiError(res.status, "Report generation failed");
+    const blob = await res.blob();
+    const safe = acqName.replace(/[/\\]/g, "-").slice(0, 50);
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${safe} — Data Gaps Report.xlsx`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  },
 };
 
 /** Fetch an output workbook with the auth header and trigger a browser download. */

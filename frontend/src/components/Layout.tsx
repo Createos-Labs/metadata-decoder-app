@@ -1,5 +1,5 @@
 import { useEffect, useRef, type ReactNode } from "react";
-import { Link } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 import { useAuth } from "../lib/auth";
 import { Button, Card, Spinner } from "./ui";
 
@@ -48,6 +48,31 @@ function SignInScreen() {
   );
 }
 
+function NavTabs() {
+  const { pathname } = useLocation();
+  const inMA = pathname.startsWith("/ma");
+  return (
+    <nav className="flex gap-1">
+      <Link
+        to="/"
+        className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+          !inMA ? "bg-navy text-white" : "text-muted hover:text-ink"
+        }`}
+      >
+        LE Ingestion
+      </Link>
+      <Link
+        to="/ma"
+        className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+          inMA ? "bg-navy text-white" : "text-muted hover:text-ink"
+        }`}
+      >
+        M&A Audit
+      </Link>
+    </nav>
+  );
+}
+
 export function Layout({ children }: { children: ReactNode }) {
   const { ready, config, user, signOut } = useAuth();
 
@@ -67,7 +92,10 @@ export function Layout({ children }: { children: ReactNode }) {
     <div className="min-h-screen">
       <header className="border-b border-slate-200 bg-white">
         <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-3">
-          <Brand />
+          <div className="flex items-center gap-6">
+            <Brand />
+            <NavTabs />
+          </div>
           {user && (
             <div className="flex items-center gap-3">
               <div className="hidden text-right sm:block">
