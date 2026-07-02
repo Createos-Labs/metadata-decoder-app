@@ -153,11 +153,9 @@ function FindingRow({
 
 function ScanSection({
   scan,
-  acqId,
   onDeleted,
 }: {
   scan: MAScan;
-  acqId: string;
   onDeleted: () => void;
 }) {
   const qc = useQueryClient();
@@ -416,7 +414,6 @@ export function MADetailPage() {
             <ScanSection
               key={scan.id}
               scan={scan}
-              acqId={id}
               onDeleted={() => deleteScanMutation.mutate(scan.id)}
             />
           ))}
