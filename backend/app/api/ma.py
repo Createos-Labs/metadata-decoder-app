@@ -56,6 +56,18 @@ async def list_acquisitions(user: User = Depends(require_user)) -> dict:
     return {"acquisitions": get_ma_service().list_acquisitions()}
 
 
+@router.get("/debug/acquisitions")
+async def debug_acquisitions(user: User = Depends(require_user)) -> dict:
+    """Temp: return raw Firestore doc IDs vs stored id field to diagnose mismatch."""
+    from ..db import get_db, MA_ACQUISITIONS
+    db = get_db()
+    docs = list(db._fs.collection(MA_ACQUISITIONS).stream())
+    return {
+        "count": len(docs),
+        "docs": [{"firestore_key": d.id, "stored_id": d.to_dict().get("id"), "name": d.to_dict().get("name")} for d in docs],
+    }
+
+
 @router.get("/acquisitions/{acq_id}")
 async def get_acquisition(acq_id: str, user: User = Depends(require_user)) -> dict:
     svc = get_ma_service()
