@@ -212,11 +212,12 @@ class MAService:
             raise ValueError(f"Acquisition {acq_id!r} not found.")
 
         scan_id = uuid.uuid4().hex
-        self.storage.write(_key(scan_id, "original.xlsx"), data)
+        ext = Path(filename).suffix.lower() or ".xlsx"
+        self.storage.write(_key(scan_id, f"original{ext}"), data)
 
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
-            in_path = tmp / "input.xlsx"
+            in_path = tmp / f"input{ext}"
             in_path.write_bytes(data)
             result = sm.analyze(in_path)
 

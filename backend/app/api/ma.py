@@ -96,8 +96,8 @@ async def upload_ma_scan(
     settings: Settings = Depends(get_settings),
 ) -> dict:
     name = file.filename or "file.xlsx"
-    if not name.lower().endswith(".xlsx"):
-        raise HTTPException(status_code=400, detail="Please upload an .xlsx file.")
+    if not (name.lower().endswith(".xlsx") or name.lower().endswith(".csv")):
+        raise HTTPException(status_code=400, detail="Please upload an .xlsx or .csv file.")
     data = await file.read()
     if not data:
         raise HTTPException(status_code=400, detail="Uploaded file is empty.")

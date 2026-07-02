@@ -32,8 +32,9 @@ function UploadZone({ acqId, onUploaded }: { acqId: string; onUploaded: () => vo
   const inputRef = useRef<HTMLInputElement>(null);
 
   async function handleFile(file: File) {
-    if (!file.name.toLowerCase().endsWith(".xlsx")) {
-      setError("Please upload an .xlsx file.");
+    const name = file.name.toLowerCase();
+    if (!name.endsWith(".xlsx") && !name.endsWith(".csv")) {
+      setError("Please upload an .xlsx or .csv file.");
       return;
     }
     setLoading(true);
@@ -66,7 +67,7 @@ function UploadZone({ acqId, onUploaded }: { acqId: string; onUploaded: () => vo
       <input
         ref={inputRef}
         type="file"
-        accept=".xlsx"
+        accept=".xlsx,.csv"
         className="hidden"
         onChange={e => { const f = e.target.files?.[0]; if (f) handleFile(f); }}
       />
@@ -77,7 +78,7 @@ function UploadZone({ acqId, onUploaded }: { acqId: string; onUploaded: () => vo
         </div>
       ) : (
         <>
-          <p className="text-sm font-medium text-ink">Drop an .xlsx file here or click to upload</p>
+          <p className="text-sm font-medium text-ink">Drop an .xlsx or .csv file here or click to upload</p>
           <p className="mt-1 text-xs text-muted">All sheets will be scanned automatically</p>
         </>
       )}

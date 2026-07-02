@@ -465,9 +465,50 @@ def _check_cross_sheet_isrcs(
 # Main entry point
 # ---------------------------------------------------------------------------
 
+def _load_sheets(input_path: Path) -> list[tuple[str, pd.DataFrame]]:
+    """
+    Load all data sheets from an Excel or CSV file.
+    Returns a list of (sheet_name, DataFrame) tuples.
+    CSV files are treated as a single sheet named after the file stem.
+    """
+    suffix = input_path.suffix.lower()
+
+    if suffix == ".csv":
+        # Try common encodings so mis-encoded exports don't crash.
+        for enc in ("utf-8-sig", "utf-8", "latin-1", "cp1252"):
+            try:
+                df = pd.read_csv(input_path, header=0, encoding=enc, low_memory=False)
+                df = df.dropna(how="all", axis=1).dropna(how="all", axis=0)
+                df.columns = [str(c).strip() for c in df.columns]
+                return [(input_path.stem, df)]
+            except UnicodeDecodeError:
+                continue
+        return []
+
+    # Excel: load sheet names without reading data first.
+    from openpyxl import load_workbook as _lw
+    wb = _lw(input_path, read_only=True, data_only=True)
+    sheet_names = wb.sheetnames
+    wb.close()
+
+    SKIP_SHEET_HINTS = {"dropdown", "dropdowns", "notes", "instructions", "legend", "ref", "lookup"}
+    sheets = []
+    for sheet_name in sheet_names:
+        if any(hint in sheet_name.lower() for hint in SKIP_SHEET_HINTS):
+            continue
+        try:
+            df = pd.read_excel(input_path, sheet_name=sheet_name, header=0)
+            df = df.dropna(how="all", axis=1).dropna(how="all", axis=0)
+            df.columns = [str(c).strip() for c in df.columns]
+            sheets.append((sheet_name, df))
+        except Exception:
+            continue
+    return sheets
+
+
 def analyze(input_path: Path) -> dict:
     """
-    Scan all sheets in the workbook and return a findings dict.
+    Scan all sheets in the workbook (or a single CSV) and return a findings dict.
 
     Returns:
         {
@@ -479,27 +520,13 @@ def analyze(input_path: Path) -> dict:
           }
         }
     """
-    from openpyxl import load_workbook as _lw
-
-    wb = _lw(input_path, read_only=True, data_only=True)
-    sheet_names = wb.sheetnames
-    wb.close()
+    sheets = _load_sheets(input_path)
 
     findings: list[dict] = []
     isrc_maps: dict[str, dict[str, str]] = {}
     sheet_stats: dict[str, dict] = {}
 
-    SKIP_SHEET_HINTS = {"dropdown", "dropdowns", "notes", "instructions", "legend", "ref", "lookup"}
-
-    for sheet_name in sheet_names:
-        # Skip obvious utility/reference tabs.
-        if any(hint in sheet_name.lower() for hint in SKIP_SHEET_HINTS):
-            continue
-
-        try:
-            df = pd.read_excel(input_path, sheet_name=sheet_name, header=0)
-        except Exception:
-            continue
+    for sheet_name, df in sheets:
 
         # Drop fully-empty columns and rows.
         df = df.dropna(how="all", axis=1).dropna(how="all", axis=0)
