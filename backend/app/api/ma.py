@@ -57,7 +57,7 @@ async def list_acquisitions(user: User = Depends(require_user)) -> dict:
 
 
 @router.get("/debug/acquisitions")
-async def debug_acquisitions(user: User = Depends(require_user)) -> dict:
+async def debug_acquisitions() -> dict:
     """Temp: return raw Firestore doc IDs vs stored id field to diagnose mismatch."""
     from ..db import get_db, MA_ACQUISITIONS
     db = get_db()
