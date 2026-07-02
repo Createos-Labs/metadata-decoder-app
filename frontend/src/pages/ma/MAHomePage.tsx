@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../../lib/api";
 import type { MAAcquisition } from "../../lib/types";
@@ -82,6 +82,7 @@ function NewAcquisitionModal({ onClose, onCreated }: {
 
 export function MAHomePage() {
   const qc = useQueryClient();
+  const navigate = useNavigate();
   const [showModal, setShowModal] = useState(false);
 
   const { data, isLoading } = useQuery({
@@ -97,8 +98,7 @@ export function MAHomePage() {
   function handleCreated(acq: MAAcquisition) {
     qc.invalidateQueries({ queryKey: ["ma-acquisitions"] });
     setShowModal(false);
-    // Navigate to the new acquisition.
-    window.location.href = `/ma/${acq.id}`;
+    navigate(`/ma/${acq.id}`);
   }
 
   const acquisitions = data?.acquisitions ?? [];

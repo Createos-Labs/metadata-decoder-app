@@ -56,29 +56,6 @@ async def list_acquisitions(user: User = Depends(require_user)) -> dict:
     return {"acquisitions": get_ma_service().list_acquisitions()}
 
 
-@router.get("/debug/acquisitions")
-async def debug_acquisitions() -> dict:
-    """Temp: diagnose get_acquisition returning None when document exists."""
-    from ..db import get_db, MA_ACQUISITIONS
-    db = get_db()
-    # List all docs via stream
-    stream_docs = list(db._fs.collection(MA_ACQUISITIONS).stream())
-    results = []
-    for d in stream_docs:
-        acq_id = d.id
-        stored = d.to_dict()
-        # Now try the exact same call used in get_acquisition
-        direct = db._fs.collection(MA_ACQUISITIONS).document(acq_id).get()
-        results.append({
-            "firestore_key": acq_id,
-            "stored_id": stored.get("id"),
-            "name": stored.get("name"),
-            "direct_get_exists": direct.exists,
-            "service_get_result": db.get_acquisition(acq_id) is not None,
-        })
-    return {"count": len(stream_docs), "docs": results}
-
-
 @router.get("/acquisitions/{acq_id}")
 async def get_acquisition(acq_id: str, user: User = Depends(require_user)) -> dict:
     svc = get_ma_service()
