@@ -99,10 +99,11 @@ class Database:
         docs = (
             self._fs.collection(MA_SCANS)
             .where("acquisition_id", "==", acq_id)
-            .order_by("created_at", direction="ASCENDING")
             .stream()
         )
-        return [d.to_dict() for d in docs]
+        results = [d.to_dict() for d in docs]
+        results.sort(key=lambda d: d.get("created_at", ""))
+        return results
 
     def update_ma_scan(self, scan_id: str, fields: dict) -> None:
         self._fs.collection(MA_SCANS).document(scan_id).update(fields)
