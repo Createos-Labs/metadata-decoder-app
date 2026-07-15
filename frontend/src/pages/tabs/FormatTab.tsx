@@ -36,6 +36,7 @@ export function FormatTab({
   const corrections = results.formatCorrections;
   const splits = results.splitsReview;
   const cols = results.formatColumns;
+  const rows = results.formatRows;
   const splitCols = useMemo(() => splitColumns(splits), [splits]);
 
   const [cellVals, setCellVals] = useState<Record<string, string>>(() =>
@@ -100,13 +101,24 @@ export function FormatTab({
     },
   });
 
-  const nothing = corrections.length === 0 && splits.length === 0 && cols.length === 0;
+  const nothing = corrections.length === 0 && splits.length === 0 && cols.length === 0 && rows.length === 0;
   if (nothing) {
     return <p className="py-8 text-center text-sm text-muted">No format issues.</p>;
   }
 
   return (
     <div className="space-y-8">
+      {rows.length > 0 && (
+        <div className="space-y-2">
+          {rows.map((r: Row, i: number) => (
+            <div key={i} className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+              <span className="font-semibold">{String(r.Issue ?? "Format issue")}</span>
+              {r.Difference ? <span className="ml-2 text-amber-700">— {String(r.Difference)}</span> : null}
+            </div>
+          ))}
+        </div>
+      )}
+
       {cols.length > 0 && (
         <div className="rounded-lg border border-format/60 bg-format/30 p-3 text-sm text-format-ink">
           <span className="font-semibold">Auto-fixed on Apply:</span>{" "}

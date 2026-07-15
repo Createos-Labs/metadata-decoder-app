@@ -2048,8 +2048,13 @@ def find_format_issues(
         bad_dates = 0
         min_year, max_year = 1900, _dt.date.today().year + 5
         for idx, val in df[release_date_col].items():
-            if val is None or (isinstance(val, float) and pd.isna(val)):
+            if val is None or (isinstance(val, float) and pd.isna(val)) or val is pd.NaT:
                 continue
+            try:
+                if pd.isna(val):
+                    continue
+            except (TypeError, ValueError):
+                pass
             parsed = None
             if isinstance(val, (_dt.datetime, _dt.date)):
                 parsed = val if isinstance(val, _dt.date) else val.date()
