@@ -171,7 +171,7 @@ PLACEHOLDER_VALUES = {
 FORMAT_SCHEMAS: dict[str, dict] = {
     "label-engine": {
         "display_name": "Label Engine Master",
-        "sheet_hints": ["Metadata - Master"],
+        "sheet_hints": ["Metadata - Master", "Sheet1", "Metadata"],
         "column_aliases": {},
         "required_fields_override": None,   # use global REQUIRED_FIELDS
         "checks": {"artist_typos", "isrc_duplicates", "missing_fields", "format_validation"},
@@ -276,7 +276,10 @@ def detect_format(wb, sheet_name: str) -> dict:
     """
     ws = wb[sheet_name]
     raw_headers = list(next(ws.iter_rows(min_row=1, max_row=1, values_only=True), ()))
-    headers = set(str(h).strip() for h in _strip_new_prefix(raw_headers) if h is not None)
+    headers = set(
+        str(h).strip().rstrip("*").strip()
+        for h in _strip_new_prefix(raw_headers) if h is not None
+    )
 
     best_key = "label-engine"
     best_score = 0.0
@@ -561,7 +564,7 @@ def detect_all_sheets_to_scan(input_path: Path) -> list[tuple[str, dict]]:
         for sheet_name in wb.sheetnames:
             ws = wb[sheet_name]
             raw = list(next(ws.iter_rows(min_row=1, max_row=1, values_only=True), ()))
-            cleaned_headers = set(str(h).strip() for h in _strip_new_prefix(raw) if h)
+            cleaned_headers = set(str(h).strip().rstrip("*").strip() for h in _strip_new_prefix(raw) if h)
 
             # Check composition before master — ISWC presence disambiguates.
             # We iterate in a fixed priority order rather than dict order.
