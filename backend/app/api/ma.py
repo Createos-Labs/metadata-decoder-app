@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from ..auth import User, require_user
+from ..auth import User, require_ma_access, require_user
 from ..config import Settings, get_settings
 from ..ma_service import get_ma_service
 
@@ -44,7 +44,7 @@ class FindingsReview(BaseModel):
 @router.post("/acquisitions", status_code=status.HTTP_201_CREATED)
 async def create_acquisition(
     body: CreateAcquisition,
-    user: User = Depends(require_user),
+    user: User = Depends(require_ma_access),
 ) -> dict:
     return get_ma_service().create_acquisition(
         name=body.name, company=body.company, user_email=user.email
@@ -52,12 +52,12 @@ async def create_acquisition(
 
 
 @router.get("/acquisitions")
-async def list_acquisitions(user: User = Depends(require_user)) -> dict:
+async def list_acquisitions(user: User = Depends(require_ma_access)) -> dict:
     return {"acquisitions": get_ma_service().list_acquisitions()}
 
 
 @router.get("/acquisitions/{acq_id}")
-async def get_acquisition(acq_id: str, user: User = Depends(require_user)) -> dict:
+async def get_acquisition(acq_id: str, user: User = Depends(require_ma_access)) -> dict:
     svc = get_ma_service()
     acq = svc.get_acquisition(acq_id)
     if not acq:
@@ -70,7 +70,7 @@ async def get_acquisition(acq_id: str, user: User = Depends(require_user)) -> di
 async def update_acquisition(
     acq_id: str,
     body: UpdateAcquisition,
-    user: User = Depends(require_user),
+    user: User = Depends(require_ma_access),
 ) -> dict:
     svc = get_ma_service()
     if not svc.get_acquisition(acq_id):
@@ -80,7 +80,7 @@ async def update_acquisition(
 
 
 @router.delete("/acquisitions/{acq_id}")
-async def delete_acquisition(acq_id: str, user: User = Depends(require_user)) -> dict:
+async def delete_acquisition(acq_id: str, user: User = Depends(require_ma_access)) -> dict:
     if not get_ma_service().delete_acquisition(acq_id):
         raise HTTPException(status_code=404, detail="Acquisition not found.")
     return {"deleted": acq_id}
@@ -92,7 +92,7 @@ async def delete_acquisition(acq_id: str, user: User = Depends(require_user)) ->
 async def upload_ma_scan(
     acq_id: str,
     file: UploadFile,
-    user: User = Depends(require_user),
+    user: User = Depends(require_ma_access),
     settings: Settings = Depends(get_settings),
 ) -> dict:
     name = file.filename or "file.xlsx"
@@ -114,7 +114,7 @@ async def upload_ma_scan(
 
 
 @router.get("/scans/{scan_id}")
-async def get_ma_scan(scan_id: str, user: User = Depends(require_user)) -> dict:
+async def get_ma_scan(scan_id: str, user: User = Depends(require_ma_access)) -> dict:
     svc = get_ma_service()
     scan = svc.get_ma_scan(scan_id)
     if not scan:
@@ -127,7 +127,7 @@ async def get_ma_scan(scan_id: str, user: User = Depends(require_user)) -> dict:
 async def review_findings(
     scan_id: str,
     body: FindingsReview,
-    user: User = Depends(require_user),
+    user: User = Depends(require_ma_access),
 ) -> dict:
     svc = get_ma_service()
     if not svc.get_ma_scan(scan_id):
@@ -138,7 +138,7 @@ async def review_findings(
 
 @router.delete("/acquisitions/{acq_id}/scans/{scan_id}")
 async def delete_ma_scan(
-    acq_id: str, scan_id: str, user: User = Depends(require_user)
+    acq_id: str, scan_id: str, user: User = Depends(require_ma_access)
 ) -> dict:
     if not get_ma_service().delete_ma_scan(scan_id, acq_id):
         raise HTTPException(status_code=404, detail="Scan not found.")
@@ -148,7 +148,7 @@ async def delete_ma_scan(
 # ---- Report generation -----------------------------------------------------
 
 @router.post("/acquisitions/{acq_id}/report")
-async def generate_report(acq_id: str, user: User = Depends(require_user)):
+async def generate_report(acq_id: str, user: User = Depends(require_ma_access)):
     svc = get_ma_service()
     acq = svc.get_acquisition(acq_id)
     if not acq:

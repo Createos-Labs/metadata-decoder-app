@@ -17,6 +17,7 @@ LEAVE_ARTIST = "leave_artist"
 LEAVE_ISRC = "leave_isrc"
 MA_ACQUISITIONS = "ma_acquisitions"
 MA_SCANS = "ma_scans"
+MA_ACCESS = "ma_access"
 
 
 class Database:
@@ -110,6 +111,24 @@ class Database:
 
     def delete_ma_scan(self, scan_id: str) -> bool:
         ref = self._fs.collection(MA_SCANS).document(scan_id)
+        if not ref.get().exists:
+            return False
+        ref.delete()
+        return True
+
+    # ---- M&A access control ------------------------------------------------
+
+    def has_ma_access(self, email: str) -> bool:
+        return self._fs.collection(MA_ACCESS).document(email.lower()).get().exists
+
+    def list_ma_access(self) -> list[str]:
+        return [d.id for d in self._fs.collection(MA_ACCESS).stream()]
+
+    def grant_ma_access(self, email: str) -> None:
+        self._fs.collection(MA_ACCESS).document(email.lower()).set({"email": email.lower()})
+
+    def revoke_ma_access(self, email: str) -> bool:
+        ref = self._fs.collection(MA_ACCESS).document(email.lower())
         if not ref.get().exists:
             return False
         ref.delete()

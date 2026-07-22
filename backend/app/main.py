@@ -12,8 +12,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.requests import Request
 
-from .api import scans
-from .api import ma
+from .api import scans, ma, admin
 from .config import get_settings
 
 settings = get_settings()
@@ -21,6 +20,7 @@ app = FastAPI(title="Metadata Decoder", version="1.0.0")
 
 app.include_router(scans.router)
 app.include_router(ma.router)
+app.include_router(admin.router)
 
 
 @app.get("/api/config")

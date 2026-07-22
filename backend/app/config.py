@@ -37,6 +37,8 @@ class Settings:
 
         self.max_upload_bytes: int = int(os.environ.get("MAX_UPLOAD_BYTES", str(25 * 1024 * 1024)))
 
+        self.ma_admin_email: str = os.environ.get("MA_ADMIN_EMAIL", "").strip().lower()
+
 
 @lru_cache
 def get_settings() -> Settings:

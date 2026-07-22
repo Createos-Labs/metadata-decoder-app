@@ -50,25 +50,39 @@ function SignInScreen() {
 
 function NavTabs() {
   const { pathname } = useLocation();
+  const { user } = useAuth();
   const inMA = pathname.startsWith("/ma");
+  const inAdmin = pathname.startsWith("/admin");
   return (
     <nav className="flex gap-1">
       <Link
         to="/"
         className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
-          !inMA ? "bg-navy text-white" : "text-muted hover:text-ink"
+          !inMA && !inAdmin ? "bg-navy text-white" : "text-muted hover:text-ink"
         }`}
       >
         LE Ingestion
       </Link>
-      <Link
-        to="/ma"
-        className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
-          inMA ? "bg-navy text-white" : "text-muted hover:text-ink"
-        }`}
-      >
-        M&A Audit
-      </Link>
+      {user?.maAccess && (
+        <Link
+          to="/ma"
+          className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+            inMA ? "bg-navy text-white" : "text-muted hover:text-ink"
+          }`}
+        >
+          M&A Audit
+        </Link>
+      )}
+      {user?.isAdmin && (
+        <Link
+          to="/admin"
+          className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+            inAdmin ? "bg-navy text-white" : "text-muted hover:text-ink"
+          }`}
+        >
+          Admin
+        </Link>
+      )}
     </nav>
   );
 }

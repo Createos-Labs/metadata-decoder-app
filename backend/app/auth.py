@@ -87,3 +87,40 @@ async def require_user(
         )
     token = authorization.split(" ", 1)[1].strip()
     return _verify_google_token(token, settings)
+
+
+def _is_admin(email: str, settings: Settings) -> bool:
+    return bool(settings.ma_admin_email and email.lower() == settings.ma_admin_email)
+
+
+def _has_ma_access(email: str, settings: Settings) -> bool:
+    if not settings.auth_enabled:
+        return True
+    if _is_admin(email, settings):
+        return True
+    from .db import get_db
+    return get_db().has_ma_access(email.lower())
+
+
+async def require_ma_access(
+    user: User = Depends(require_user),
+    settings: Settings = Depends(get_settings),
+) -> User:
+    if not _has_ma_access(user.email, settings):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="M&A Audit access is restricted to the Royalties team.",
+        )
+    return user
+
+
+async def require_admin(
+    user: User = Depends(require_user),
+    settings: Settings = Depends(get_settings),
+) -> User:
+    if not _is_admin(user.email, settings):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin access required.",
+        )
+    return user

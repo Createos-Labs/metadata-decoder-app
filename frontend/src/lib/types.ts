@@ -103,4 +103,6 @@ export interface AppUser {
   email: string;
   name: string;
   picture: string;
+  maAccess: boolean;
+  isAdmin: boolean;
 }

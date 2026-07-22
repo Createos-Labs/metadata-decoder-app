@@ -102,6 +102,16 @@ export const api = {
   deleteMAScan: (acqId: string, scanId: string) =>
     request<{ deleted: string }>(`/api/ma/acquisitions/${acqId}/scans/${scanId}`, { method: "DELETE" }),
 
+  // ---- Admin ------------------------------------------------------------------
+  listMaAccess: () =>
+    request<{ emails: string[] }>("/api/admin/ma-access"),
+
+  grantMaAccess: (email: string) =>
+    postJson<{ granted: string }>("/api/admin/ma-access", { email }),
+
+  revokeMaAccess: (email: string) =>
+    request<{ revoked: string }>(`/api/admin/ma-access/${encodeURIComponent(email)}`, { method: "DELETE" }),
+
   downloadMAReport: async (acqId: string, acqName: string) => {
     const headers = new Headers();
     if (authToken) headers.set("Authorization", `Bearer ${authToken}`);
