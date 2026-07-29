@@ -1122,11 +1122,14 @@ def find_isrc_conflicts(
         # ---- Check 2: same ISRC + same release appearing more than once ------
         # Skipped for splits-correction sheets where multiple rows per ISRC/
         # release is the expected data structure (one row per allocatee).
+        # Rows with no release identifier are excluded from this check — the
+        # same ISRC legitimately appears on multiple albums/compilations, and
+        # blank UPCs must not be bucketed together as if they were one release.
         release_conflict = False
+        release_counts: dict[str, int] = defaultdict(int)
         if check_same_release and release_col:
-            release_counts: dict[str, int] = defaultdict(int)
             for o in occs:
-                if o["release"]:
+                if o["release"]:  # only count rows that actually have a release ID
                     release_counts[o["release"]] += 1
             release_conflict = any(n > 1 for n in release_counts.values())
 
