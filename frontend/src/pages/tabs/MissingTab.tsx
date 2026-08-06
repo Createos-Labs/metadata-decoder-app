@@ -27,6 +27,23 @@ export function MissingTab({
   );
   const [values, setValues] = useState<Record<string, string>>(() => ({ ...initial }));
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [colFilter, setColFilter] = useState<string | null>(null);
+
+  const colCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const c of cells) {
+      const col = String(c.Column ?? "");
+      counts[col] = (counts[col] ?? 0) + 1;
+    }
+    return counts;
+  }, [cells]);
+
+  const sortedCols = useMemo(
+    () => Object.entries(colCounts).sort((a, b) => b[1] - a[1]).map(([col]) => col),
+    [colCounts]
+  );
+
+  const visibleCells = colFilter ? cells.filter(c => String(c.Column ?? "") === colFilter) : cells;
 
   const fillCount = useMemo(
     () => cells.filter((c) => (values[rowKey(c)] ?? "").trim()).length,
@@ -67,6 +84,36 @@ export function MissingTab({
         One row per blank required cell. <span className="font-medium">Fill value</span> is
         pre-filled where the scanner can infer it confidently — confirm or override, clear to skip.
       </p>
+      {/* Column filter pills */}
+      {sortedCols.length > 1 && (
+        <div className="flex flex-wrap gap-1">
+          {colFilter && (
+            <button
+              onClick={() => setColFilter(null)}
+              className="rounded-full bg-navy/10 px-3 py-1 text-xs font-medium text-navy hover:bg-navy/20"
+            >
+              ✕ show all columns
+            </button>
+          )}
+          {sortedCols.map(col => (
+            <button
+              key={col}
+              onClick={() => setColFilter(f => f === col ? null : col)}
+              className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
+                colFilter === col
+                  ? "bg-navy text-white"
+                  : "bg-slate-100 text-muted hover:bg-slate-200"
+              }`}
+            >
+              {col}
+              <span className={`ml-1 ${colFilter === col ? "text-blue-200" : "text-slate-400"}`}>
+                {colCounts[col]}
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+
       <DataTable
         scroll
         head={
@@ -80,7 +127,7 @@ export function MissingTab({
           </>
         }
       >
-        {cells.map((c: Row) => {
+        {visibleCells.map((c: Row) => {
           const k = rowKey(c);
           return (
             <tr key={k} className="hover:bg-slate-50">
