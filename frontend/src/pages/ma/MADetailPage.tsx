@@ -384,6 +384,7 @@ function ScanSection({
   const [localFindings, setLocalFindings] = useState<MAFinding[] | null>(null);
   const [saving, setSaving] = useState(false);
   const [filter, setFilter] = useState<"all" | "unreviewed" | "reviewed" | "dismissed">("all");
+  const [fieldFilter, setFieldFilter] = useState<string | null>(null);
 
   const { data, isLoading } = useQuery({
     queryKey: ["ma-scan", scan.id],
@@ -413,10 +414,20 @@ function ScanSection({
     }
   }
 
+  // Build field counts across all findings (not affected by current filters)
+  const fieldCounts = findings.reduce<Record<string, number>>((acc, f) => {
+    acc[f.field] = (acc[f.field] ?? 0) + 1;
+    return acc;
+  }, {});
+  const sortedFields = Object.entries(fieldCounts)
+    .sort((a, b) => b[1] - a[1])
+    .map(([field]) => field);
+
   const filtered = findings.filter(f => {
-    if (filter === "unreviewed") return !f.dismissed && !f.severity;
-    if (filter === "reviewed")   return !f.dismissed && !!f.severity;
-    if (filter === "dismissed")  return f.dismissed;
+    if (filter === "unreviewed") { if (f.dismissed || f.severity) return false; }
+    else if (filter === "reviewed")  { if (f.dismissed || !f.severity) return false; }
+    else if (filter === "dismissed") { if (!f.dismissed) return false; }
+    if (fieldFilter && f.field !== fieldFilter) return false;
     return true;
   });
 
@@ -470,8 +481,8 @@ function ScanSection({
             <p className="py-4 text-center text-sm text-muted">No findings — this file looks clean.</p>
           ) : (
             <>
-              {/* Filter tabs */}
-              <div className="mb-3 flex gap-1">
+              {/* Status filter tabs */}
+              <div className="mb-2 flex flex-wrap gap-1">
                 {(["all", "unreviewed", "reviewed", "dismissed"] as const).map(f => (
                   <button
                     key={f}
@@ -488,6 +499,36 @@ function ScanSection({
                   </button>
                 ))}
               </div>
+
+              {/* Field filter pills */}
+              {sortedFields.length > 1 && (
+                <div className="mb-3 flex flex-wrap gap-1">
+                  {fieldFilter && (
+                    <button
+                      onClick={() => setFieldFilter(null)}
+                      className="rounded-full bg-navy/10 px-3 py-1 text-xs font-medium text-navy hover:bg-navy/20"
+                    >
+                      ✕ clear field filter
+                    </button>
+                  )}
+                  {sortedFields.map(field => (
+                    <button
+                      key={field}
+                      onClick={() => setFieldFilter(f => f === field ? null : field)}
+                      className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
+                        fieldFilter === field
+                          ? "bg-rose-600 text-white"
+                          : "bg-slate-100 text-muted hover:bg-slate-200"
+                      }`}
+                    >
+                      {field}
+                      <span className={`ml-1 ${fieldFilter === field ? "text-rose-200" : "text-slate-400"}`}>
+                        {fieldCounts[field]}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
 
               <div className="space-y-2">
                 {filtered.map(f => (
