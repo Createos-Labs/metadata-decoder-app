@@ -2,8 +2,9 @@
 from __future__ import annotations
 
 import io
+from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
@@ -146,6 +147,87 @@ async def delete_ma_scan(
 
 
 # ---- Report generation -----------------------------------------------------
+
+# ---- Mapping template ------------------------------------------------------
+
+@router.get("/mapping/blank-template")
+async def download_blank_template(user: User = Depends(require_ma_access)):
+    """Return a blank XLSX mapping template with column structure and Instructions tab."""
+    import build_mapping as bm  # noqa: PLC0415
+
+    data = bm.build_blank_template()
+    return StreamingResponse(
+        io.BytesIO(data),
+        media_type=XLSX_MIME,
+        headers={
+            "Content-Disposition": 'attachment; filename="MA Mapping Template - Blank.xlsx"'
+        },
+    )
+
+
+@router.post("/acquisitions/{acq_id}/mapping")
+async def generate_mapping(
+    acq_id: str,
+    files: List[UploadFile] = File(...),
+    user: User = Depends(require_ma_access),
+):
+    """
+    Accept multiple Glassnote export files (catalog, contracts, statements).
+    Auto-detect file types from filenames and generate an XLSX mapping template.
+    """
+    import build_mapping as bm  # noqa: PLC0415
+
+    svc = get_ma_service()
+    acq = svc.get_acquisition(acq_id)
+    if not acq:
+        raise HTTPException(status_code=404, detail="Acquisition not found.")
+
+    classified: dict[str, bytes | list] = {}
+    source_filenames: dict[str, str | list] = {}
+    unknown_files: list[str] = []
+
+    for upload in files:
+        name = upload.filename or ""
+        data = await upload.read()
+        if not data:
+            continue
+        ftype = bm.detect_file_type(name)
+        if ftype == "statement_zip":
+            classified.setdefault("statement_zip", [])
+            classified["statement_zip"].append(data)
+            source_filenames.setdefault("statement_zip", [])
+            source_filenames["statement_zip"].append(name)
+        elif ftype != "unknown":
+            classified[ftype] = data
+            source_filenames[ftype] = name
+        else:
+            unknown_files.append(name)
+
+    if "catalog" not in classified or "isrc_links" not in classified:
+        missing = []
+        if "catalog" not in classified:
+            missing.append("Products/Tracks catalog export (.xlsx)")
+        if "isrc_links" not in classified:
+            missing.append("Contracts w/Albums & Tracks export (.xls)")
+        raise HTTPException(
+            status_code=422,
+            detail=f"Missing required files: {'; '.join(missing)}. "
+                   f"Unrecognised files: {unknown_files or 'none'}.",
+        )
+
+    try:
+        xlsx_bytes, stats = bm.build_mapping(classified, source_filenames)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Mapping generation failed: {exc}")
+
+    safe_name = acq["name"].replace("/", "-").replace("\\", "-")[:50]
+    filename = f"MA Mapping Template - {safe_name}.xlsx"
+    return StreamingResponse(
+        io.BytesIO(xlsx_bytes),
+        media_type=XLSX_MIME,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
 
 @router.post("/acquisitions/{acq_id}/report")
 async def generate_report(acq_id: str, user: User = Depends(require_ma_access)):

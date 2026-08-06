@@ -5,6 +5,226 @@ import { api } from "../../lib/api";
 import type { MAFinding, MAScan, MASeverity } from "../../lib/types";
 import { Button, Card, Spinner, Toast } from "../../components/ui";
 
+// ---------------------------------------------------------------------------
+// Stage 2 — Mapping Template
+// ---------------------------------------------------------------------------
+
+const DETECTED_TYPES: Record<string, { label: string; required: boolean; hint: string }> = {
+  catalog:        { label: "Products / Tracks catalog",           required: true,  hint: "e.g. Products_Tracks_20260603.xlsx" },
+  isrc_links:     { label: "Contracts w/ Albums & Tracks",        required: true,  hint: "e.g. Artist_Contracts_wAlbumsTracks.xls" },
+  contract_terms: { label: "Contracts Terms",                     required: false, hint: "e.g. Artist_Contracts_Terms.xlsx" },
+  payees:         { label: "Payees",                              required: false, hint: "e.g. Artist_Payees.xls" },
+  statement_zip:  { label: "Statement files",                     required: false, hint: "ZIP files containing Sales CSVs or Statement XLSXs" },
+  unknown:        { label: "Unrecognised",                        required: false, hint: "" },
+};
+
+function detectType(filename: string): string {
+  const n = filename.toLowerCase();
+  if (n.endsWith(".zip")) return "statement_zip";
+  if (n.includes("walbum") || n.includes("w_album")) return "isrc_links";
+  if (n.includes("terms") && n.includes("contract")) return "contract_terms";
+  if (n.includes("payee")) return "payees";
+  if (n.includes("product") || (n.includes("track") && !n.includes("contract"))) return "catalog";
+  return "unknown";
+}
+
+function MappingStage({ acqId, acqName }: { acqId: string; acqName: string }) {
+  const [files, setFiles] = useState<File[]>([]);
+  const [dragging, setDragging] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [done, setDone] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  function addFiles(incoming: FileList | null) {
+    if (!incoming) return;
+    setFiles(prev => {
+      const existing = new Set(prev.map(f => f.name));
+      const newOnes = Array.from(incoming).filter(f => !existing.has(f.name));
+      return [...prev, ...newOnes];
+    });
+    setDone(false);
+    setError("");
+  }
+
+  function removeFile(name: string) {
+    setFiles(prev => prev.filter(f => f.name !== name));
+    setDone(false);
+  }
+
+  const grouped = files.reduce<Record<string, File[]>>((acc, f) => {
+    const t = detectType(f.name);
+    acc[t] = [...(acc[t] ?? []), f];
+    return acc;
+  }, {});
+
+  const hasRequired = grouped["catalog"]?.length > 0 && grouped["isrc_links"]?.length > 0;
+
+  async function handleGenerate() {
+    setLoading(true);
+    setError("");
+    try {
+      await api.generateMapping(acqId, files, acqName);
+      setDone(true);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Generation failed.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleBlankTemplate() {
+    try {
+      await api.downloadBlankTemplate();
+    } catch {
+      setError("Failed to download blank template.");
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <p className="text-sm text-muted">
+            Drop your seller's export files below. The tool auto-detects each file type from
+            the filename, joins them, and generates a colour-coded ISRC × rate mapping XLSX
+            ready to review and push into Label Engine.
+          </p>
+          <p className="mt-1 text-xs text-muted">
+            Required: <span className="font-medium text-ink">Products/Tracks catalog</span> +{" "}
+            <span className="font-medium text-ink">Contracts w/Albums & Tracks</span>.
+            All other files are optional but enrich the output.
+          </p>
+        </div>
+        <button
+          onClick={handleBlankTemplate}
+          className="shrink-0 text-xs font-medium text-navy underline-offset-2 hover:underline"
+        >
+          Download blank template
+        </button>
+      </div>
+
+      {/* Drop zone */}
+      <div
+        onDragOver={e => { e.preventDefault(); setDragging(true); }}
+        onDragLeave={() => setDragging(false)}
+        onDrop={e => { e.preventDefault(); setDragging(false); addFiles(e.dataTransfer.files); }}
+        onClick={() => inputRef.current?.click()}
+        className={`cursor-pointer rounded-lg border-2 border-dashed px-6 py-6 text-center transition-colors ${
+          dragging ? "border-navy bg-navy/5" : "border-slate-300 hover:border-navy/50"
+        }`}
+      >
+        <input
+          ref={inputRef}
+          type="file"
+          multiple
+          accept=".xlsx,.xls,.csv,.zip"
+          className="hidden"
+          onChange={e => addFiles(e.target.files)}
+        />
+        <p className="text-sm font-medium text-ink">
+          Drop all your export files here or click to select
+        </p>
+        <p className="mt-1 text-xs text-muted">
+          Accepts .xlsx, .xls, .csv, .zip — add as many files as you have
+        </p>
+      </div>
+
+      {/* File list grouped by detected type */}
+      {files.length > 0 && (
+        <Card className="overflow-hidden p-0">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-slate-200 bg-slate-50">
+                <th className="px-4 py-2 text-left text-xs font-medium text-muted">File</th>
+                <th className="px-4 py-2 text-left text-xs font-medium text-muted">Detected type</th>
+                <th className="px-4 py-2 text-left text-xs font-medium text-muted">Required?</th>
+                <th className="px-4 py-2" />
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {files.map(f => {
+                const t = detectType(f.name);
+                const info = DETECTED_TYPES[t] ?? DETECTED_TYPES["unknown"];
+                return (
+                  <tr key={f.name} className="hover:bg-slate-50">
+                    <td className="px-4 py-2 font-mono text-xs text-ink">{f.name}</td>
+                    <td className="px-4 py-2">
+                      <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
+                        t === "unknown"
+                          ? "bg-slate-100 text-slate-500"
+                          : "bg-emerald-50 text-emerald-700"
+                      }`}>
+                        {info.label}
+                      </span>
+                    </td>
+                    <td className="px-4 py-2 text-xs text-muted">
+                      {info.required ? (
+                        <span className="font-medium text-rose-600">Required</span>
+                      ) : (
+                        <span className="text-slate-400">Optional</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-2 text-right">
+                      <button
+                        onClick={e => { e.stopPropagation(); removeFile(f.name); }}
+                        className="text-xs text-muted hover:text-red-600"
+                      >
+                        Remove
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </Card>
+      )}
+
+      {/* Required files checklist */}
+      {files.length > 0 && (
+        <div className="flex gap-4 text-xs">
+          {["catalog", "isrc_links"].map(t => (
+            <span key={t} className={`flex items-center gap-1 ${grouped[t]?.length > 0 ? "text-emerald-700" : "text-rose-600"}`}>
+              {grouped[t]?.length > 0 ? "✓" : "✗"} {DETECTED_TYPES[t].label}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {error && (
+        <p className="rounded-md bg-red-50 px-3 py-2 text-xs text-red-700">{error}</p>
+      )}
+
+      {done && (
+        <p className="rounded-md bg-emerald-50 px-3 py-2 text-xs text-emerald-700">
+          Mapping template downloaded successfully.
+        </p>
+      )}
+
+      <div className="flex gap-2">
+        <Button
+          onClick={handleGenerate}
+          disabled={!hasRequired || loading || files.length === 0}
+        >
+          {loading ? (
+            <span className="flex items-center gap-2">
+              <Spinner className="h-4 w-4" /> Generating…
+            </span>
+          ) : (
+            "Generate mapping template"
+          )}
+        </Button>
+        {files.length > 0 && (
+          <Button variant="secondary" onClick={() => { setFiles([]); setDone(false); setError(""); }}>
+            Clear files
+          </Button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 const SEVERITIES: MASeverity[] = ["BLOCKER", "HIGH", "MEDIUM", "LOW", "INFO"];
 
 const SEV_COLORS: Record<string, string> = {
@@ -300,6 +520,7 @@ export function MADetailPage() {
   const qc = useQueryClient();
   const [toast, setToast] = useState<{ msg: string; tone: "ok" | "error" } | null>(null);
   const [editingStatus, setEditingStatus] = useState(false);
+  const [stage, setStage] = useState<"audit" | "mapping">("audit");
 
   const { data, isLoading, isError } = useQuery({
     queryKey: ["ma-acquisition", id],
@@ -392,33 +613,54 @@ export function MADetailPage() {
         </Button>
       </div>
 
-      {totalReviewed === 0 && scans.length > 0 && (
-        <p className="text-xs text-amber-700 bg-amber-50 rounded px-3 py-2 inline-block">
-          Review and assign severities to at least one finding before generating the report.
-        </p>
-      )}
+      {/* Stage tabs */}
+      <div className="flex gap-1 border-b border-slate-200 pb-0">
+        {(["audit", "mapping"] as const).map(s => (
+          <button
+            key={s}
+            onClick={() => setStage(s)}
+            className={`rounded-t-md px-4 py-2 text-sm font-medium transition-colors ${
+              stage === s
+                ? "border border-b-white border-slate-200 bg-white text-navy -mb-px"
+                : "text-muted hover:text-ink"
+            }`}
+          >
+            {s === "audit" ? "Stage 1 — Data Gap Audit" : "Stage 2 — Mapping Template"}
+          </button>
+        ))}
+      </div>
 
-      {/* Upload zone */}
-      <UploadZone
-        acqId={id}
-        onUploaded={() => qc.invalidateQueries({ queryKey: ["ma-acquisition", id] })}
-      />
+      {stage === "audit" ? (
+        <>
+          {totalReviewed === 0 && scans.length > 0 && (
+            <p className="text-xs text-amber-700 bg-amber-50 rounded px-3 py-2 inline-block">
+              Review and assign severities to at least one finding before generating the report.
+            </p>
+          )}
 
-      {/* Scan sections */}
-      {scans.length === 0 ? (
-        <Card className="p-8 text-center">
-          <p className="text-sm text-muted">No files uploaded yet. Drop your first file above.</p>
-        </Card>
+          <UploadZone
+            acqId={id}
+            onUploaded={() => qc.invalidateQueries({ queryKey: ["ma-acquisition", id] })}
+          />
+
+          {scans.length === 0 ? (
+            <Card className="p-8 text-center">
+              <p className="text-sm text-muted">No files uploaded yet. Drop your first file above.</p>
+            </Card>
+          ) : (
+            <div className="space-y-4">
+              {scans.map(scan => (
+                <ScanSection
+                  key={scan.id}
+                  scan={scan}
+                  onDeleted={() => deleteScanMutation.mutate(scan.id)}
+                />
+              ))}
+            </div>
+          )}
+        </>
       ) : (
-        <div className="space-y-4">
-          {scans.map(scan => (
-            <ScanSection
-              key={scan.id}
-              scan={scan}
-              onDeleted={() => deleteScanMutation.mutate(scan.id)}
-            />
-          ))}
-        </div>
+        <MappingStage acqId={id} acqName={acquisition.name} />
       )}
 
       {toast && <Toast message={toast.msg} tone={toast.tone} />}
