@@ -203,19 +203,38 @@ def _load_xlsx(data: bytes) -> tuple[openpyxl.Workbook, object]:
 
 def load_catalog(data: bytes) -> dict[str, dict]:
     """Returns {isrc: {field: value, ...}}"""
-    _, ws = _load_xlsx(data)
-    hdrs = {ws.cell(1, c).value: c for c in range(1, ws.max_column + 1)}
-    result: dict[str, dict] = {}
     wanted = [
         "isrc", "track-title", "primary-track-artist", "upc", "album-title",
         "catalog-no", "label-name", "p-line", "release-date",
         "track-minutes", "track-seconds", "product-type", "full-price (usd)",
     ]
+    try:
+        wb = xlrd.open_workbook(file_contents=data)
+        ws = wb.sheets()[0]
+        hdrs = {ws.cell_value(0, c): c for c in range(ws.ncols)}
+        result: dict[str, dict] = {}
+        for r in range(1, ws.nrows):
+            isrc_col = hdrs.get("isrc", -1)
+            isrc = ws.cell_value(r, isrc_col) if isrc_col >= 0 else None
+            if not isrc:
+                continue
+            rec: dict = {}
+            for k in wanted:
+                col = hdrs.get(k, -1)
+                v = ws.cell_value(r, col) if col >= 0 else ""
+                rec[k] = v
+            result[str(isrc).strip()] = rec
+        return result
+    except Exception:
+        pass
+    _, ws = _load_xlsx(data)
+    hdrs = {ws.cell(1, c).value: c for c in range(1, ws.max_column + 1)}
+    result = {}
     for r in range(2, ws.max_row + 1):
         isrc = ws.cell(r, hdrs.get("isrc", 0)).value if "isrc" in hdrs else None
         if not isrc:
             continue
-        rec: dict = {}
+        rec = {}
         for k in wanted:
             col = hdrs.get(k)
             rec[k] = ws.cell(r, col).value if col else ""
@@ -225,13 +244,40 @@ def load_catalog(data: bytes) -> dict[str, dict]:
 
 def load_contract_terms(data: bytes) -> dict[str, list[dict]]:
     """Returns {contract_title: [term_dict, ...]}"""
-    _, ws = _load_xlsx(data)
-    hdrs = {ws.cell(1, c).value: c for c in range(1, ws.max_column + 1)}
-    result: dict[str, list[dict]] = defaultdict(list)
     wanted = [
         "contract-title", "payee", "region", "channel", "source", "price",
         "rate-type", "rate", "reserve-rate", "term-start", "term-end", "comments",
     ]
+    try:
+        wb = xlrd.open_workbook(file_contents=data)
+        ws = wb.sheets()[0]
+        hdrs = {ws.cell_value(0, c): c for c in range(ws.ncols)}
+        result: dict[str, list[dict]] = defaultdict(list)
+        title_col = hdrs.get("contract-title", -1)
+        if title_col >= 0:
+            for r in range(1, ws.nrows):
+                title = ws.cell_value(r, title_col)
+                if not title:
+                    continue
+                term: dict = {}
+                for k in wanted:
+                    col = hdrs.get(k, -1)
+                    v = ws.cell_value(r, col) if col >= 0 else ""
+                    # xlrd returns dates as floats; convert to string
+                    if ws.cell_type(r, col) == xlrd.XL_CELL_DATE if col >= 0 else False:
+                        try:
+                            dt = xlrd.xldate_as_datetime(v, wb.datemode)
+                            v = dt.strftime("%Y-%m-%d")
+                        except Exception:
+                            pass
+                    term[k] = v or ""
+                result[str(title).strip()].append(term)
+        return dict(result)
+    except Exception:
+        pass
+    _, ws = _load_xlsx(data)
+    hdrs = {ws.cell(1, c).value: c for c in range(1, ws.max_column + 1)}
+    result = defaultdict(list)
     for r in range(2, ws.max_row + 1):
         title_col = hdrs.get("contract-title")
         if not title_col:
@@ -239,7 +285,7 @@ def load_contract_terms(data: bytes) -> dict[str, list[dict]]:
         title = ws.cell(r, title_col).value
         if not title:
             continue
-        term: dict = {}
+        term = {}
         for k in wanted:
             col = hdrs.get(k)
             v = ws.cell(r, col).value if col else ""
