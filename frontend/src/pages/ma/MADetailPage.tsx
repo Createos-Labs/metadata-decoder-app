@@ -40,6 +40,7 @@ function MappingStage({ acqId, acqName }: { acqId: string; acqName: string }) {
   const [downloading, setDownloading] = useState(false);
   const [resetting, setResetting] = useState(false);
   const [error, setError] = useState("");
+  const [lastUpload, setLastUpload] = useState<MAMappingStatus | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const { data: status, isLoading: statusLoading } = useQuery<MAMappingStatus>({
@@ -63,12 +64,15 @@ function MappingStage({ acqId, acqName }: { acqId: string; acqName: string }) {
     if (!files.length) return;
     setUploading(true);
     setError("");
+    setLastUpload(null);
     try {
-      await api.addMappingFiles(acqId, files);
+      const result = await api.addMappingFiles(acqId, files);
       setFiles([]);
+      setLastUpload(result);
       queryClient.invalidateQueries({ queryKey: ["mapping-status", acqId] });
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Upload failed.");
+      const msg = err instanceof Error ? err.message : "Upload failed.";
+      setError(`Upload failed: ${msg}`);
     } finally {
       setUploading(false);
     }
@@ -256,7 +260,16 @@ function MappingStage({ acqId, acqName }: { acqId: string; acqName: string }) {
         );
       })()}
 
-      {error && <p className="rounded-md bg-red-50 px-3 py-2 text-xs text-red-700">{error}</p>}
+      {lastUpload && (
+        <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-800">
+          <span className="font-semibold">Upload saved.</span>{" "}
+          {lastUpload.has_catalog && `${lastUpload.isrc_count.toLocaleString()} ISRCs`}
+          {lastUpload.has_links && `, contracts linked`}
+          {lastUpload.stmt_files_processed > 0 && `, ${lastUpload.stmt_files_processed} statement file${lastUpload.stmt_files_processed !== 1 ? "s" : ""} processed`}
+          {" — scroll up to see the full mapping state."}
+        </div>
+      )}
+      {error && <p className="rounded-md bg-red-50 px-3 py-2 text-sm font-medium text-red-700">{error}</p>}
 
       {/* Persistent download — visible whenever state exists, even with no staged files */}
       {!hasExistingData && !statusLoading && files.length === 0 && (
