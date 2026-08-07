@@ -68,6 +68,37 @@ function MappingStage({ acqId, acqName }: { acqId: string; acqName: string }) {
     setLastUpload(null);
     setUploadProgress(null);
 
+    // Cloud Run hard limit is 32MB per request.
+    // Large CSVs are split into row-batches client-side; each chunk includes the header.
+    const CHUNK_BYTES = 20 * 1024 * 1024; // 20 MB chunks
+
+    async function splitAndUploadCsv(f: File): Promise<void> {
+      const text = await f.text();
+      const lines = text.split("\n");
+      const header = lines[0];
+      const dataLines = lines.slice(1);
+      const chunks: string[][] = [[]];
+      let curSize = header.length + 1;
+      for (const line of dataLines) {
+        if (!line.trim()) continue;
+        const lineSize = line.length + 1;
+        if (curSize + lineSize > CHUNK_BYTES && chunks[chunks.length - 1].length > 0) {
+          chunks.push([]);
+          curSize = header.length + 1;
+        }
+        chunks[chunks.length - 1].push(line);
+        curSize += lineSize;
+      }
+      for (let ci = 0; ci < chunks.length; ci++) {
+        if (chunks[ci].length === 0) continue;
+        const csvText = [header, ...chunks[ci]].join("\n");
+        const chunkFile = new File([csvText], f.name, { type: "text/csv" });
+        const suffix = chunks.length > 1 ? ` (part ${ci + 1}/${chunks.length})` : "";
+        setUploadProgress({ current: ci + 1, total: chunks.length, file: f.name + suffix });
+        lastResult = await api.addMappingFiles(acqId, [chunkFile]);
+      }
+    }
+
     let lastResult: MAMappingStatus | null = null;
     const errors: string[] = [];
 
@@ -75,10 +106,14 @@ function MappingStage({ acqId, acqName }: { acqId: string; acqName: string }) {
       const f = files[i];
       setUploadProgress({ current: i + 1, total: files.length, file: f.name });
       try {
-        lastResult = await api.addMappingFiles(acqId, [f]);
+        if (f.name.toLowerCase().endsWith(".csv") && f.size > CHUNK_BYTES) {
+          await splitAndUploadCsv(f);
+        } else {
+          lastResult = await api.addMappingFiles(acqId, [f]);
+        }
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : "Unknown error";
-        errors.push(`${f.name}: ${msg}`);
+        errors.push(`${f.name}: ${msg || "server error"}`);
       }
     }
 
