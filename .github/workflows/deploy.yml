@@ -57,7 +57,7 @@ jobs:
             --project "$PROJECT_ID" \
             --service-account "$RUNTIME_SA" \
             --set-env-vars "GOOGLE_CLOUD_PROJECT=${PROJECT_ID},GCS_BUCKET=${PROJECT_ID}-metadata-decoder,OAUTH_CLIENT_ID=${{ secrets.OAUTH_CLIENT_ID }},MA_ADMIN_EMAIL=${{ secrets.MA_ADMIN_EMAIL }},MAX_UPLOAD_BYTES=262144000" \
-            --memory 2Gi \
+            --memory 4Gi \
             --quiet
 
       - name: Show service URL

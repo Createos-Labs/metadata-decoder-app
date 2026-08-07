@@ -350,18 +350,23 @@ def _load_isrc_links_from_ws(ws) -> list[dict]:
 
 
 def load_statement_csv(data: bytes, net_by: dict) -> int:
-    """Parse a single Profit Share Sales Export CSV into net_by. Returns row count."""
+    """
+    Parse a single Profit Share Sales Export CSV into net_by.
+    Streams row-by-row to avoid holding the full decoded text in memory.
+    Returns row count.
+    """
     try:
-        reader = csv.DictReader(
-            io.TextIOWrapper(io.BytesIO(data), encoding="utf-8-sig")
-        )
+        # Use a raw bytes buffer so we don't decode the entire file at once
+        buf = io.TextIOWrapper(io.BytesIO(data), encoding="utf-8-sig")
+        reader = csv.DictReader(buf)
         count = 0
         for row in reader:
             contract = row.get("Contract Name", row.get("﻿Contract Name", "")).strip()
             isrc = row.get("ISRC", "").strip() or "__release__"
-            period = row.get("Sale Date", "").strip()[:7]
+            # Sale Date format is YYYY-MM (first 7 chars of whatever date string)
+            period = (row.get("Sale Date") or "").strip()[:7]
             try:
-                net = float(row.get("Net Payable", 0) or 0)
+                net = float(row.get("Net Payable") or 0)
             except (ValueError, TypeError):
                 net = 0.0
             if contract and period:
@@ -403,25 +408,32 @@ def _extract_period_from_filename(filename: str) -> str | None:
 
 def load_statement_xlsx(data: bytes, filename: str, best_balance: dict) -> int:
     """
-    Parse an Orchard monthly fullreport XLSX for ISRC-level Net Payable data.
-    Mutates best_balance by summing Net Payable per contract across all rows.
-    Returns number of rows processed.
+    Parse an Orchard monthly fullreport XLSX for Net Payable data grouped by contract.
+    Uses read_only + streaming to avoid loading the full file into memory.
+    Mutates best_balance in place. Returns number of data rows processed.
     """
     period = _extract_period_from_filename(filename)
     if not period:
         return 0
     try:
-        wb = openpyxl.load_workbook(io.BytesIO(data), data_only=True, read_only=True)
+        wb = openpyxl.load_workbook(
+            io.BytesIO(data), data_only=True, read_only=True
+        )
         ws = wb.active
         rows_iter = ws.iter_rows(values_only=True)
         header = next(rows_iter, None)
         if not header:
+            wb.close()
             return 0
-        # find relevant columns
-        hdrs = {str(v).strip().lower() if v else "": i for i, v in enumerate(header)}
-        contract_col = hdrs.get("contract name") if "contract name" in hdrs else None
-        net_col = hdrs.get("net payable") if "net payable" in hdrs else None
+        hdrs = {
+            str(v).strip().lower(): i
+            for i, v in enumerate(header)
+            if v is not None
+        }
+        contract_col = hdrs.get("contract name")
+        net_col = hdrs.get("net payable")
         if contract_col is None or net_col is None:
+            wb.close()
             return 0
         totals: dict[str, float] = defaultdict(float)
         count = 0
@@ -435,16 +447,18 @@ def load_statement_xlsx(data: bytes, filename: str, best_balance: dict) -> int:
                 net = 0.0
             totals[contract] += net
             count += 1
+        wb.close()
         for contract, total in totals.items():
             key = contract.lower()
             existing = best_balance.get(key)
-            if existing is None or _period_rank(period) > _period_rank(existing["period"]):
+            if existing is None or _period_rank(period) > _period_rank(
+                existing["period"]
+            ):
                 best_balance[key] = {
                     "balance": round(total, 2),
                     "period": period,
                     "artist": contract,
                 }
-        wb.close()
         return count
     except Exception:
         return 0
