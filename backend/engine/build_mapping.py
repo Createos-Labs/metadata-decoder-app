@@ -174,7 +174,7 @@ PCT_FORMAT = '0.00"%"'
 def detect_file_type(filename: str) -> str:
     """
     Returns one of: 'catalog', 'contract_terms', 'isrc_links', 'payees',
-                    'statement_zip', 'unknown'
+                    'statement_zip', 'statement_csv', 'statement_xlsx', 'unknown'
     Based on Glassnote export filename conventions.
     """
     n = filename.lower()
@@ -188,6 +188,10 @@ def detect_file_type(filename: str) -> str:
         return "payees"
     if "product" in n or ("track" in n and "contract" not in n):
         return "catalog"
+    if n.endswith(".csv"):
+        return "statement_csv"
+    if n.endswith(".xlsx") and ("fullreport" in n or "revenue_details" in n):
+        return "statement_xlsx"
     return "unknown"
 
 
@@ -343,6 +347,107 @@ def _load_isrc_links_from_ws(ws) -> list[dict]:
             rec[k] = ws.cell(r, col).value if col else ""
         result.append(rec)
     return result
+
+
+def load_statement_csv(data: bytes, net_by: dict) -> int:
+    """Parse a single Profit Share Sales Export CSV into net_by. Returns row count."""
+    try:
+        reader = csv.DictReader(
+            io.TextIOWrapper(io.BytesIO(data), encoding="utf-8-sig")
+        )
+        count = 0
+        for row in reader:
+            contract = row.get("Contract Name", row.get("﻿Contract Name", "")).strip()
+            isrc = row.get("ISRC", "").strip() or "__release__"
+            period = row.get("Sale Date", "").strip()[:7]
+            try:
+                net = float(row.get("Net Payable", 0) or 0)
+            except (ValueError, TypeError):
+                net = 0.0
+            if contract and period:
+                net_by[contract][isrc][period] += net
+                count += 1
+        return count
+    except Exception:
+        return 0
+
+
+def _extract_period_from_filename(filename: str) -> str | None:
+    """Extract a period key (e.g. '1h25') from an Orchard monthly XLSX filename."""
+    import re
+    n = filename.lower()
+    # Try "YYYYMMDD_MonYYYY_" prefix — e.g. "20230222_Jan2023_"
+    m = re.search(r"_([a-z]{3})(\d{4})_", n)
+    if m:
+        mon_abbr = m.group(1)
+        year = m.group(2)[-2:]
+        months_h1 = {"jan", "feb", "mar", "apr", "may", "jun"}
+        half = "1h" if mon_abbr in months_h1 else "2h"
+        return f"{half}{year}"
+    # Try "_Month_YYYY_" pattern — e.g. "_February_2026_"
+    months = {
+        "january": "1h", "february": "1h", "march": "1h",
+        "april": "1h", "may": "1h", "june": "1h",
+        "july": "2h", "august": "2h", "september": "2h",
+        "october": "2h", "november": "2h", "december": "2h",
+    }
+    m2 = re.search(r"_([a-z]+)_(\d{4})_", n)
+    if m2:
+        mon = m2.group(1)
+        year = m2.group(2)[-2:]
+        half = months.get(mon)
+        if half:
+            return f"{half}{year}"
+    return None
+
+
+def load_statement_xlsx(data: bytes, filename: str, best_balance: dict) -> int:
+    """
+    Parse an Orchard monthly fullreport XLSX for ISRC-level Net Payable data.
+    Mutates best_balance by summing Net Payable per contract across all rows.
+    Returns number of rows processed.
+    """
+    period = _extract_period_from_filename(filename)
+    if not period:
+        return 0
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(data), data_only=True, read_only=True)
+        ws = wb.active
+        rows_iter = ws.iter_rows(values_only=True)
+        header = next(rows_iter, None)
+        if not header:
+            return 0
+        # find relevant columns
+        hdrs = {str(v).strip().lower() if v else "": i for i, v in enumerate(header)}
+        contract_col = hdrs.get("contract name") if "contract name" in hdrs else None
+        net_col = hdrs.get("net payable") if "net payable" in hdrs else None
+        if contract_col is None or net_col is None:
+            return 0
+        totals: dict[str, float] = defaultdict(float)
+        count = 0
+        for row in rows_iter:
+            contract = str(row[contract_col] or "").strip()
+            if not contract:
+                continue
+            try:
+                net = float(row[net_col] or 0)
+            except (ValueError, TypeError):
+                net = 0.0
+            totals[contract] += net
+            count += 1
+        for contract, total in totals.items():
+            key = contract.lower()
+            existing = best_balance.get(key)
+            if existing is None or _period_rank(period) > _period_rank(existing["period"]):
+                best_balance[key] = {
+                    "balance": round(total, 2),
+                    "period": period,
+                    "artist": contract,
+                }
+        wb.close()
+        return count
+    except Exception:
+        return 0
 
 
 def _period_rank(p: str) -> int:
@@ -1065,9 +1170,29 @@ def build_mapping(
     stmt_zips = files.get("statement_zip", [])
     if isinstance(stmt_zips, (bytes, bytearray)):
         stmt_zips = [stmt_zips]
-
     for zip_data in stmt_zips:
         stmt_files_processed += load_statement_zip(zip_data, net_by, best_balance)
+
+    stmt_csvs = files.get("statement_csv", [])
+    if isinstance(stmt_csvs, (bytes, bytearray)):
+        stmt_csvs = [stmt_csvs]
+    for csv_data in stmt_csvs:
+        rows_read = load_statement_csv(csv_data, net_by)
+        if rows_read:
+            stmt_files_processed += 1
+
+    stmt_xlsxs = files.get("statement_xlsx", [])
+    if isinstance(stmt_xlsxs, (bytes, bytearray)):
+        stmt_xlsxs = [stmt_xlsxs]
+    sfnames = source_filenames or {}
+    xlsx_fnames = sfnames.get("statement_xlsx", [])
+    if isinstance(xlsx_fnames, str):
+        xlsx_fnames = [xlsx_fnames]
+    for i, xlsx_data in enumerate(stmt_xlsxs):
+        fname = xlsx_fnames[i] if i < len(xlsx_fnames) else ""
+        rows_read = load_statement_xlsx(xlsx_data, fname, best_balance)
+        if rows_read:
+            stmt_files_processed += 1
 
     rows = _build_data_rows(catalog, contract_terms, links, net_by, best_balance)
 

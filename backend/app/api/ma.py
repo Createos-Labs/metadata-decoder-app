@@ -192,11 +192,11 @@ async def generate_mapping(
         if not data:
             continue
         ftype = bm.detect_file_type(name)
-        if ftype == "statement_zip":
-            classified.setdefault("statement_zip", [])
-            classified["statement_zip"].append(data)
-            source_filenames.setdefault("statement_zip", [])
-            source_filenames["statement_zip"].append(name)
+        if ftype in ("statement_zip", "statement_csv", "statement_xlsx"):
+            classified.setdefault(ftype, [])
+            classified[ftype].append(data)
+            source_filenames.setdefault(ftype, [])
+            source_filenames[ftype].append(name)
         elif ftype != "unknown":
             classified[ftype] = data
             source_filenames[ftype] = name
