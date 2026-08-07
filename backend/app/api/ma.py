@@ -165,15 +165,28 @@ async def download_blank_template(user: User = Depends(require_ma_access)):
     )
 
 
+@router.get("/acquisitions/{acq_id}/mapping/status")
+async def get_mapping_status(acq_id: str, user: User = Depends(require_ma_access)):
+    """Return what has been processed into this acquisition's mapping state so far."""
+    import build_mapping as bm  # noqa: PLC0415
+
+    svc = get_ma_service()
+    if not svc.get_acquisition(acq_id):
+        raise HTTPException(status_code=404, detail="Acquisition not found.")
+    state = svc.get_mapping_state(acq_id)
+    return bm.state_summary(state)
+
+
 @router.post("/acquisitions/{acq_id}/mapping")
-async def generate_mapping(
+async def add_mapping_files(
     acq_id: str,
     files: List[UploadFile] = File(...),
     user: User = Depends(require_ma_access),
 ):
     """
-    Accept multiple Glassnote export files (catalog, contracts, statements).
-    Auto-detect file types from filenames and generate an XLSX mapping template.
+    Add a batch of files to this acquisition's incremental mapping state,
+    then return the updated XLSX. Each call accumulates on top of previous uploads.
+    Catalog/contract files overwrite; statement files accumulate.
     """
     import build_mapping as bm  # noqa: PLC0415
 
@@ -211,7 +224,10 @@ async def generate_mapping(
         )
 
     try:
-        xlsx_bytes, stats = bm.build_mapping(classified, source_filenames)
+        state = svc.get_mapping_state(acq_id)
+        bm.apply_files_to_state(state, classified, source_filenames)
+        svc.save_mapping_state(acq_id, state)
+        xlsx_bytes = bm.render_state_to_xlsx(state)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Mapping generation failed: {exc}")
 
@@ -222,6 +238,41 @@ async def generate_mapping(
         media_type=XLSX_MIME,
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+@router.get("/acquisitions/{acq_id}/mapping")
+async def download_mapping(acq_id: str, user: User = Depends(require_ma_access)):
+    """Download the current mapping XLSX without uploading new files."""
+    import build_mapping as bm  # noqa: PLC0415
+
+    svc = get_ma_service()
+    acq = svc.get_acquisition(acq_id)
+    if not acq:
+        raise HTTPException(status_code=404, detail="Acquisition not found.")
+    state = svc.get_mapping_state(acq_id)
+    if not state.get("catalog") and not state.get("links"):
+        raise HTTPException(status_code=404, detail="No mapping data yet — upload files first.")
+    try:
+        xlsx_bytes = bm.render_state_to_xlsx(state)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Render failed: {exc}")
+    safe_name = acq["name"].replace("/", "-").replace("\\", "-")[:50]
+    filename = f"MA Mapping Template - {safe_name}.xlsx"
+    return StreamingResponse(
+        io.BytesIO(xlsx_bytes),
+        media_type=XLSX_MIME,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.delete("/acquisitions/{acq_id}/mapping", status_code=status.HTTP_204_NO_CONTENT)
+async def reset_mapping(acq_id: str, user: User = Depends(require_ma_access)):
+    """Clear the mapping state for this acquisition (start fresh)."""
+    svc = get_ma_service()
+    if not svc.get_acquisition(acq_id):
+        raise HTTPException(status_code=404, detail="Acquisition not found.")
+    svc.clear_mapping_state(acq_id)
+    return None
 
 
 @router.post("/acquisitions/{acq_id}/report")

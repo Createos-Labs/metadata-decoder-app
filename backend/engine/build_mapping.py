@@ -1130,114 +1130,122 @@ def _build_source_guide_sheet(ws, stats: dict):
 
 
 # ---------------------------------------------------------------------------
-# Public API
+# Public API — state-based incremental model
 # ---------------------------------------------------------------------------
 
-def build_blank_template() -> bytes:
-    """XLSX with column structure + Instructions tab, no data rows."""
-    wb = openpyxl.Workbook()
-    ws = wb.active
-    ws.title = "Mapping Template"
-    ws.sheet_properties.tabColor = "B5696A"
-    _build_mapping_sheet(ws, [])
-
-    wi = wb.create_sheet("Instructions")
-    wi.sheet_properties.tabColor = "8B7BAB"
-    _build_instructions_sheet(wi)
-
-    buf = io.BytesIO()
-    wb.save(buf)
-    return buf.getvalue()
+def empty_state() -> dict:
+    """Return a blank mapping state (nothing processed yet)."""
+    return {
+        "catalog": {},
+        "contract_terms": {},
+        "links": [],
+        "net_by": {},          # {contract: {isrc: {period: float}}}
+        "best_balance": {},    # {contract_lower: {balance, period, artist}}
+        "source_files": [],    # [[type, filename], ...]
+        "stmt_files_processed": 0,
+    }
 
 
-def build_mapping(
-    files: dict[str, bytes | list[bytes]],
-    source_filenames: dict[str, str | list[str]] | None = None,
-) -> tuple[bytes, dict]:
+def apply_files_to_state(
+    state: dict,
+    files: dict,
+    source_filenames: dict | None = None,
+) -> dict:
     """
-    Generate the full mapping XLSX from seller export files.
-
-    Args:
-        files: Dict mapping detected type to bytes.
-               Keys: 'catalog', 'contract_terms', 'isrc_links', 'payees', 'statement_zip'
-               'statement_zip' may be a list of bytes (multiple zips).
-        source_filenames: Optional dict mapping type → original filename(s) for the Source Guide.
-
-    Returns:
-        (xlsx_bytes, stats_dict)
+    Apply a batch of detected files to an existing mapping state.
+    Catalog/contract/links uploads overwrite (they're snapshots).
+    Statement uploads accumulate on top of existing balance data.
+    Mutates state in place and returns it.
     """
-    catalog = load_catalog(files["catalog"]) if "catalog" in files else {}
-    contract_terms = (
-        load_contract_terms(files["contract_terms"])
-        if "contract_terms" in files
-        else {}
-    )
-    links = (
-        load_isrc_links(files["isrc_links"]) if "isrc_links" in files else []
-    )
+    sfnames = source_filenames or {}
 
-    # Statement processing
+    # --- Snapshot files: overwrite on each upload ---
+    if "catalog" in files:
+        state["catalog"] = load_catalog(files["catalog"])
+    if "contract_terms" in files:
+        state["contract_terms"] = load_contract_terms(files["contract_terms"])
+    if "isrc_links" in files:
+        state["links"] = load_isrc_links(files["isrc_links"])
+
+    # --- Statement files: accumulate ---
+    # Reconstruct mutable defaultdicts from stored plain dicts
     net_by: dict = defaultdict(lambda: defaultdict(lambda: defaultdict(float)))
-    best_balance: dict = {}
-    stmt_files_processed = 0
+    for contract, isrc_dict in state.get("net_by", {}).items():
+        for isrc, period_dict in isrc_dict.items():
+            for period, val in period_dict.items():
+                net_by[contract][isrc][period] += val
+
+    best_balance: dict = dict(state.get("best_balance", {}))
+    stmt_count = 0
 
     stmt_zips = files.get("statement_zip", [])
     if isinstance(stmt_zips, (bytes, bytearray)):
         stmt_zips = [stmt_zips]
     for zip_data in stmt_zips:
-        stmt_files_processed += load_statement_zip(zip_data, net_by, best_balance)
+        stmt_count += load_statement_zip(zip_data, net_by, best_balance)
 
     stmt_csvs = files.get("statement_csv", [])
     if isinstance(stmt_csvs, (bytes, bytearray)):
         stmt_csvs = [stmt_csvs]
     for csv_data in stmt_csvs:
-        rows_read = load_statement_csv(csv_data, net_by)
-        if rows_read:
-            stmt_files_processed += 1
+        if load_statement_csv(csv_data, net_by):
+            stmt_count += 1
 
     stmt_xlsxs = files.get("statement_xlsx", [])
     if isinstance(stmt_xlsxs, (bytes, bytearray)):
         stmt_xlsxs = [stmt_xlsxs]
-    sfnames = source_filenames or {}
     xlsx_fnames = sfnames.get("statement_xlsx", [])
     if isinstance(xlsx_fnames, str):
         xlsx_fnames = [xlsx_fnames]
     for i, xlsx_data in enumerate(stmt_xlsxs):
         fname = xlsx_fnames[i] if i < len(xlsx_fnames) else ""
-        rows_read = load_statement_xlsx(xlsx_data, fname, best_balance)
-        if rows_read:
-            stmt_files_processed += 1
+        if load_statement_xlsx(xlsx_data, fname, best_balance):
+            stmt_count += 1
 
-    rows = _build_data_rows(catalog, contract_terms, links, net_by, best_balance)
+    # Persist back to plain dicts for JSON serialisation
+    state["net_by"] = {
+        contract: {isrc: dict(pd) for isrc, pd in id_.items()}
+        for contract, id_ in net_by.items()
+    }
+    state["best_balance"] = best_balance
+    state["stmt_files_processed"] = state.get("stmt_files_processed", 0) + stmt_count
 
-    # Stats
-    unique_isrcs = len({r[0] for r in rows})
-    artists_with_balance = len(best_balance) + len(
-        {
-            r[21]  # payee name col index
-            for r in rows
-            if r[42] != ""  # balance col index
-        }
+    # Track source files (deduplicate by filename)
+    existing_fnames = {entry[1] for entry in state.get("source_files", [])}
+    for ftype, fname in sfnames.items():
+        fnames = fname if isinstance(fname, list) else [fname]
+        for fn in fnames:
+            if fn not in existing_fnames:
+                state.setdefault("source_files", []).append([ftype, fn])
+                existing_fnames.add(fn)
+
+    return state
+
+
+def render_state_to_xlsx(state: dict) -> bytes:
+    """Render the current mapping state to an XLSX workbook."""
+    net_by: dict = defaultdict(lambda: defaultdict(lambda: defaultdict(float)))
+    for contract, isrc_dict in state.get("net_by", {}).items():
+        for isrc, period_dict in isrc_dict.items():
+            for period, val in period_dict.items():
+                net_by[contract][isrc][period] += val
+
+    rows = _build_data_rows(
+        state.get("catalog", {}),
+        state.get("contract_terms", {}),
+        state.get("links", []),
+        net_by,
+        state.get("best_balance", {}),
     )
-
-    source_files_list: list[tuple[str, str]] = []
-    if source_filenames:
-        for ftype, fname in source_filenames.items():
-            if isinstance(fname, list):
-                for f in fname:
-                    source_files_list.append((ftype, f))
-            else:
-                source_files_list.append((ftype, fname))
 
     stats = {
         "row_count": len(rows),
-        "isrc_count": unique_isrcs,
-        "artists_with_balance": min(len(best_balance), 999),
-        "statement_files_processed": stmt_files_processed,
-        "source_files": source_files_list,
+        "isrc_count": len({r[0] for r in rows}),
+        "artists_with_balance": len(state.get("best_balance", {})),
+        "statement_files_processed": state.get("stmt_files_processed", 0),
+        "source_files": state.get("source_files", []),
     }
 
-    # Build workbook
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Mapping Template"
@@ -1254,4 +1262,36 @@ def build_mapping(
 
     buf = io.BytesIO()
     wb.save(buf)
-    return buf.getvalue(), stats
+    return buf.getvalue()
+
+
+def state_summary(state: dict) -> dict:
+    """Return lightweight status info without rendering the XLSX."""
+    net_by = state.get("net_by", {})
+    return {
+        "has_catalog": bool(state.get("catalog")),
+        "has_links": bool(state.get("links")),
+        "has_contract_terms": bool(state.get("contract_terms")),
+        "isrc_count": len(state.get("catalog", {})),
+        "contract_count": len(state.get("contract_terms", {})),
+        "stmt_files_processed": state.get("stmt_files_processed", 0),
+        "contracts_with_balance": len(net_by) + len(state.get("best_balance", {})),
+        "source_files": state.get("source_files", []),
+    }
+
+
+def build_blank_template() -> bytes:
+    """XLSX with column structure + Instructions tab, no data rows."""
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Mapping Template"
+    ws.sheet_properties.tabColor = "B5696A"
+    _build_mapping_sheet(ws, [])
+
+    wi = wb.create_sheet("Instructions")
+    wi.sheet_properties.tabColor = "8B7BAB"
+    _build_instructions_sheet(wi)
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()

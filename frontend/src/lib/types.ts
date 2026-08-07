@@ -82,6 +82,17 @@ export interface MAScan {
   sheet_stats: Record<string, { rows: number; columns: string[]; findings: number }>;
 }
 
+export interface MAMappingStatus {
+  has_catalog: boolean;
+  has_links: boolean;
+  has_contract_terms: boolean;
+  isrc_count: number;
+  contract_count: number;
+  stmt_files_processed: number;
+  contracts_with_balance: number;
+  source_files: [string, string][];  // [[type, filename], ...]
+}
+
 export interface MAAcquisition {
   id: string;
   name: string;

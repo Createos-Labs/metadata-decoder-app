@@ -2,20 +2,22 @@ import { useCallback, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../../lib/api";
-import type { MAFinding, MAScan, MASeverity } from "../../lib/types";
+import type { MAFinding, MAMappingStatus, MAScan, MASeverity } from "../../lib/types";
 import { Button, Card, Spinner, Toast } from "../../components/ui";
 
 // ---------------------------------------------------------------------------
 // Stage 2 — Mapping Template
 // ---------------------------------------------------------------------------
 
-const DETECTED_TYPES: Record<string, { label: string; required: boolean; hint: string }> = {
-  catalog:        { label: "Products / Tracks catalog",           required: true,  hint: "e.g. Products_Tracks_20260603.xlsx" },
-  isrc_links:     { label: "Contracts w/ Albums & Tracks",        required: true,  hint: "e.g. Artist_Contracts_wAlbumsTracks.xls" },
-  contract_terms: { label: "Contracts Terms",                     required: false, hint: "e.g. Artist_Contracts_Terms.xlsx" },
-  payees:         { label: "Payees",                              required: false, hint: "e.g. Artist_Payees.xls" },
-  statement_zip:  { label: "Statement files",                     required: false, hint: "ZIP files containing Sales CSVs or Statement XLSXs" },
-  unknown:        { label: "Unrecognised",                        required: false, hint: "" },
+const DETECTED_TYPES: Record<string, { label: string; required: boolean }> = {
+  catalog:        { label: "Products / Tracks catalog",    required: true  },
+  isrc_links:     { label: "Contracts w/ Albums & Tracks", required: true  },
+  contract_terms: { label: "Contracts Terms",              required: false },
+  payees:         { label: "Payees",                       required: false },
+  statement_zip:  { label: "Statement ZIP",                required: false },
+  statement_csv:  { label: "Statement CSV",                required: false },
+  statement_xlsx: { label: "Orchard Statement XLSX",       required: false },
+  unknown:        { label: "Unrecognised",                 required: false },
 };
 
 function detectType(filename: string): string {
@@ -25,87 +27,151 @@ function detectType(filename: string): string {
   if (n.includes("terms") && n.includes("contract")) return "contract_terms";
   if (n.includes("payee")) return "payees";
   if (n.includes("product") || (n.includes("track") && !n.includes("contract"))) return "catalog";
+  if (n.endsWith(".csv")) return "statement_csv";
+  if (n.endsWith(".xlsx") && (n.includes("fullreport") || n.includes("revenue_details"))) return "statement_xlsx";
   return "unknown";
 }
 
 function MappingStage({ acqId, acqName }: { acqId: string; acqName: string }) {
+  const queryClient = useQueryClient();
   const [files, setFiles] = useState<File[]>([]);
   const [dragging, setDragging] = useState(false);
-  const [loading, setLoading] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [downloading, setDownloading] = useState(false);
+  const [resetting, setResetting] = useState(false);
   const [error, setError] = useState("");
-  const [done, setDone] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  const { data: status, isLoading: statusLoading } = useQuery<MAMappingStatus>({
+    queryKey: ["mapping-status", acqId],
+    queryFn: () => api.getMappingStatus(acqId),
+    retry: false,
+  });
+
+  const hasExistingData = status && (status.has_catalog || status.has_links || status.stmt_files_processed > 0);
 
   function addFiles(incoming: FileList | null) {
     if (!incoming) return;
     setFiles(prev => {
       const existing = new Set(prev.map(f => f.name));
-      const newOnes = Array.from(incoming).filter(f => !existing.has(f.name));
-      return [...prev, ...newOnes];
+      return [...prev, ...Array.from(incoming).filter(f => !existing.has(f.name))];
     });
-    setDone(false);
     setError("");
   }
 
-  function removeFile(name: string) {
-    setFiles(prev => prev.filter(f => f.name !== name));
-    setDone(false);
-  }
-
-  const grouped = files.reduce<Record<string, File[]>>((acc, f) => {
-    const t = detectType(f.name);
-    acc[t] = [...(acc[t] ?? []), f];
-    return acc;
-  }, {});
-
-  const hasCatalog = (grouped["catalog"]?.length ?? 0) > 0;
-  const hasLinks = (grouped["isrc_links"]?.length ?? 0) > 0;
-  const missingRequired = (!hasCatalog ? ["Products/Tracks catalog"] : [])
-    .concat(!hasLinks ? ["Contracts w/Albums & Tracks"] : []);
-
-  async function handleGenerate() {
-    setLoading(true);
+  async function handleUpload() {
+    if (!files.length) return;
+    setUploading(true);
     setError("");
     try {
-      await api.generateMapping(acqId, files, acqName);
-      setDone(true);
+      await api.addMappingFiles(acqId, files, acqName);
+      setFiles([]);
+      queryClient.invalidateQueries({ queryKey: ["mapping-status", acqId] });
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Generation failed.");
+      setError(err instanceof Error ? err.message : "Upload failed.");
     } finally {
-      setLoading(false);
+      setUploading(false);
+    }
+  }
+
+  async function handleDownload() {
+    setDownloading(true);
+    setError("");
+    try {
+      await api.downloadCurrentMapping(acqId, acqName);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Download failed.");
+    } finally {
+      setDownloading(false);
+    }
+  }
+
+  async function handleReset() {
+    if (!confirm("Clear all mapping data for this acquisition? This cannot be undone.")) return;
+    setResetting(true);
+    try {
+      await api.resetMapping(acqId);
+      queryClient.invalidateQueries({ queryKey: ["mapping-status", acqId] });
+    } catch {
+      /* ignore */
+    } finally {
+      setResetting(false);
     }
   }
 
   async function handleBlankTemplate() {
-    try {
-      await api.downloadBlankTemplate();
-    } catch {
-      setError("Failed to download blank template.");
-    }
+    try { await api.downloadBlankTemplate(); } catch { /* ignore */ }
   }
 
+  const TYPE_LABEL: Record<string, string> = {
+    catalog: "Catalog", isrc_links: "Contracts w/Albums", contract_terms: "Contract Terms",
+    payees: "Payees", statement_zip: "Statement ZIP", statement_csv: "Statement CSV",
+    statement_xlsx: "Orchard XLSX", unknown: "Unrecognised",
+  };
+
   return (
-    <div className="space-y-4">
+    <div className="space-y-5">
+      {/* Header row */}
       <div className="flex items-start justify-between gap-4">
         <div>
           <p className="text-sm text-muted">
-            Drop your seller's export files below. The tool auto-detects each file type from
-            the filename, joins them, and generates a colour-coded ISRC × rate mapping XLSX
-            ready to review and push into Label Engine.
+            Upload files one batch at a time — the mapping state is saved between uploads.
+            Start with the catalog exports, then add statement files whenever you have them.
           </p>
           <p className="mt-1 text-xs text-muted">
-            Required: <span className="font-medium text-ink">Products/Tracks catalog</span> +{" "}
-            <span className="font-medium text-ink">Contracts w/Albums & Tracks</span>.
-            All other files are optional but enrich the output.
+            Accepts .xlsx, .xls, .csv, .zip — file types are detected automatically from the filename.
           </p>
         </div>
-        <button
-          onClick={handleBlankTemplate}
-          className="shrink-0 text-xs font-medium text-navy underline-offset-2 hover:underline"
-        >
+        <button onClick={handleBlankTemplate} className="shrink-0 text-xs font-medium text-navy underline-offset-2 hover:underline">
           Download blank template
         </button>
       </div>
+
+      {/* Current state summary */}
+      {!statusLoading && hasExistingData && (
+        <Card className="space-y-3 bg-slate-50 p-4">
+          <div className="flex items-center justify-between">
+            <p className="text-xs font-semibold uppercase tracking-wide text-muted">Mapping state</p>
+            <button onClick={handleReset} disabled={resetting} className="text-xs text-muted hover:text-red-600">
+              {resetting ? "Clearing…" : "Reset"}
+            </button>
+          </div>
+          <div className="flex flex-wrap gap-3 text-xs">
+            <span className={`rounded-full px-2.5 py-1 font-medium ${status.has_catalog ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-500"}`}>
+              {status.has_catalog ? `✓ Catalog (${status.isrc_count.toLocaleString()} ISRCs)` : "No catalog yet"}
+            </span>
+            <span className={`rounded-full px-2.5 py-1 font-medium ${status.has_links ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-500"}`}>
+              {status.has_links ? `✓ Contracts w/Albums` : "No contract links yet"}
+            </span>
+            <span className={`rounded-full px-2.5 py-1 font-medium ${status.has_contract_terms ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-500"}`}>
+              {status.has_contract_terms ? `✓ Contract Terms (${status.contract_count})` : "No contract terms yet"}
+            </span>
+            {status.stmt_files_processed > 0 && (
+              <span className="rounded-full bg-emerald-100 px-2.5 py-1 font-medium text-emerald-700">
+                ✓ {status.stmt_files_processed} statement file{status.stmt_files_processed !== 1 ? "s" : ""}
+                {status.contracts_with_balance > 0 ? ` · ${status.contracts_with_balance} contracts with balance` : ""}
+              </span>
+            )}
+          </div>
+          {status.source_files.length > 0 && (
+            <details className="text-xs text-muted">
+              <summary className="cursor-pointer hover:text-ink">
+                {status.source_files.length} file{status.source_files.length !== 1 ? "s" : ""} processed
+              </summary>
+              <ul className="mt-1 space-y-0.5 pl-3">
+                {status.source_files.map(([type, name]) => (
+                  <li key={name} className="font-mono">
+                    <span className="text-slate-400">{TYPE_LABEL[type] ?? type}: </span>{name}
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
+          <Button onClick={handleDownload} disabled={downloading} variant="secondary">
+            {downloading ? <span className="flex items-center gap-2"><Spinner className="h-4 w-4" /> Downloading…</span> : "Download current mapping"}
+          </Button>
+        </Card>
+      )}
 
       {/* Drop zone */}
       <div
@@ -117,23 +183,14 @@ function MappingStage({ acqId, acqName }: { acqId: string; acqName: string }) {
           dragging ? "border-navy bg-navy/5" : "border-slate-300 hover:border-navy/50"
         }`}
       >
-        <input
-          ref={inputRef}
-          type="file"
-          multiple
-          accept=".xlsx,.xls,.csv,.zip"
-          className="hidden"
-          onChange={e => addFiles(e.target.files)}
-        />
+        <input ref={inputRef} type="file" multiple accept=".xlsx,.xls,.csv,.zip" className="hidden" onChange={e => addFiles(e.target.files)} />
         <p className="text-sm font-medium text-ink">
-          Drop your export files here — add as many as you have
+          {hasExistingData ? "Add more files to this mapping" : "Drop your export files here"}
         </p>
-        <p className="mt-1 text-xs text-muted">
-          Accepts .xlsx, .xls, .csv, .zip — upload what you have now and regenerate as more files arrive
-        </p>
+        <p className="mt-1 text-xs text-muted">Upload one batch at a time — each upload enriches the saved mapping</p>
       </div>
 
-      {/* File list grouped by detected type */}
+      {/* Staged files */}
       {files.length > 0 && (
         <Card className="overflow-hidden p-0">
           <table className="w-full text-sm">
@@ -153,28 +210,15 @@ function MappingStage({ acqId, acqName }: { acqId: string; acqName: string }) {
                   <tr key={f.name} className="hover:bg-slate-50">
                     <td className="px-4 py-2 font-mono text-xs text-ink">{f.name}</td>
                     <td className="px-4 py-2">
-                      <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
-                        t === "unknown"
-                          ? "bg-slate-100 text-slate-500"
-                          : "bg-emerald-50 text-emerald-700"
-                      }`}>
+                      <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${t === "unknown" ? "bg-slate-100 text-slate-500" : "bg-emerald-50 text-emerald-700"}`}>
                         {info.label}
                       </span>
                     </td>
-                    <td className="px-4 py-2 text-xs text-muted">
-                      {info.required ? (
-                        <span className="font-medium text-rose-600">Required</span>
-                      ) : (
-                        <span className="text-slate-400">Optional</span>
-                      )}
+                    <td className="px-4 py-2 text-xs">
+                      {info.required ? <span className="font-medium text-rose-600">Required</span> : <span className="text-slate-400">Optional</span>}
                     </td>
                     <td className="px-4 py-2 text-right">
-                      <button
-                        onClick={e => { e.stopPropagation(); removeFile(f.name); }}
-                        className="text-xs text-muted hover:text-red-600"
-                      >
-                        Remove
-                      </button>
+                      <button onClick={e => { e.stopPropagation(); setFiles(p => p.filter(x => x.name !== f.name)); }} className="text-xs text-muted hover:text-red-600">Remove</button>
                     </td>
                   </tr>
                 );
@@ -184,42 +228,18 @@ function MappingStage({ acqId, acqName }: { acqId: string; acqName: string }) {
         </Card>
       )}
 
-      {/* Soft warning for missing files */}
-      {files.length > 0 && missingRequired.length > 0 && (
-        <p className="rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-700">
-          <span className="font-medium">Heads up:</span> {missingRequired.join(" and ")} not detected — the template will generate with the files you have, but those columns will be blank. You can add the missing files and regenerate any time.
-        </p>
-      )}
+      {error && <p className="rounded-md bg-red-50 px-3 py-2 text-xs text-red-700">{error}</p>}
 
-      {error && (
-        <p className="rounded-md bg-red-50 px-3 py-2 text-xs text-red-700">{error}</p>
-      )}
-
-      {done && (
-        <p className="rounded-md bg-emerald-50 px-3 py-2 text-xs text-emerald-700">
-          Mapping template downloaded successfully.
-        </p>
-      )}
-
-      <div className="flex gap-2">
-        <Button
-          onClick={handleGenerate}
-          disabled={loading || files.length === 0}
-        >
-          {loading ? (
-            <span className="flex items-center gap-2">
-              <Spinner className="h-4 w-4" /> Generating…
-            </span>
-          ) : (
-            "Generate mapping template"
-          )}
-        </Button>
-        {files.length > 0 && (
-          <Button variant="secondary" onClick={() => { setFiles([]); setDone(false); setError(""); }}>
-            Clear files
+      {files.length > 0 && (
+        <div className="flex gap-2">
+          <Button onClick={handleUpload} disabled={uploading}>
+            {uploading
+              ? <span className="flex items-center gap-2"><Spinner className="h-4 w-4" /> Uploading…</span>
+              : hasExistingData ? "Add to mapping & download" : "Build mapping & download"}
           </Button>
-        )}
-      </div>
+          <Button variant="secondary" onClick={() => setFiles([])}>Clear</Button>
+        </div>
+      )}
     </div>
   );
 }

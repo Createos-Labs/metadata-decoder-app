@@ -313,6 +313,30 @@ class MAService:
             self.db.update_acquisition(acq_id, {"scan_ids": updated, "updated_at": _now()})
         return True
 
+    # ---- Mapping state (incremental, stored in GCS) -------------------------
+
+    def _mapping_key(self, acq_id: str) -> str:
+        return f"ma/{acq_id}/mapping_state.json"
+
+    def get_mapping_state(self, acq_id: str) -> dict:
+        import build_mapping as bm  # noqa: PLC0415
+        key = self._mapping_key(acq_id)
+        if not self.storage.exists(key):
+            return bm.empty_state()
+        raw = self.storage.read(key)
+        return json.loads(raw.decode())
+
+    def save_mapping_state(self, acq_id: str, state: dict) -> None:
+        key = self._mapping_key(acq_id)
+        self.storage.write(key, json.dumps(state, ensure_ascii=False).encode())
+
+    def clear_mapping_state(self, acq_id: str) -> None:
+        key = self._mapping_key(acq_id)
+        try:
+            self.storage.delete_prefix(key)
+        except Exception:
+            pass
+
     # ---- Report generation --------------------------------------------------
 
     def generate_report(self, acq_id: str) -> bytes | None:

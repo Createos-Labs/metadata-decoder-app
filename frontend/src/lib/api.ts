@@ -112,6 +112,9 @@ export const api = {
   revokeMaAccess: (email: string) =>
     request<{ revoked: string }>(`/api/admin/ma-access/${encodeURIComponent(email)}`, { method: "DELETE" }),
 
+  getMappingStatus: (acqId: string) =>
+    request<import("./types").MAMappingStatus>(`/api/ma/acquisitions/${acqId}/mapping/status`),
+
   downloadBlankTemplate: async () => {
     const headers = new Headers();
     if (authToken) headers.set("Authorization", `Bearer ${authToken}`);
@@ -128,11 +131,7 @@ export const api = {
     URL.revokeObjectURL(url);
   },
 
-  generateMapping: async (
-    acqId: string,
-    files: File[],
-    acqName: string,
-  ): Promise<{ isrc_count: number; row_count: number; artists_with_balance: number }> => {
+  addMappingFiles: async (acqId: string, files: File[], acqName: string): Promise<void> => {
     const headers = new Headers();
     if (authToken) headers.set("Authorization", `Bearer ${authToken}`);
     const form = new FormData();
@@ -144,13 +143,9 @@ export const api = {
     });
     if (!res.ok) {
       let detail = res.statusText;
-      try {
-        const body = await res.json();
-        detail = body.detail ?? detail;
-      } catch { /* non-JSON */ }
+      try { const b = await res.json(); detail = b.detail ?? detail; } catch { /* non-JSON */ }
       throw new ApiError(res.status, detail);
     }
-    // Response is the XLSX blob — trigger download and return stats from headers
     const blob = await res.blob();
     const safe = acqName.replace(/[/\\]/g, "-").slice(0, 50);
     const url = URL.createObjectURL(blob);
@@ -161,9 +156,31 @@ export const api = {
     a.click();
     a.remove();
     URL.revokeObjectURL(url);
-    // Stats aren't in headers for a streaming response — return placeholder
-    return { isrc_count: 0, row_count: 0, artists_with_balance: 0 };
   },
+
+  downloadCurrentMapping: async (acqId: string, acqName: string): Promise<void> => {
+    const headers = new Headers();
+    if (authToken) headers.set("Authorization", `Bearer ${authToken}`);
+    const res = await fetch(`/api/ma/acquisitions/${acqId}/mapping`, { headers });
+    if (!res.ok) {
+      let detail = res.statusText;
+      try { const b = await res.json(); detail = b.detail ?? detail; } catch { /* non-JSON */ }
+      throw new ApiError(res.status, detail);
+    }
+    const blob = await res.blob();
+    const safe = acqName.replace(/[/\\]/g, "-").slice(0, 50);
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `MA Mapping Template - ${safe}.xlsx`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  },
+
+  resetMapping: (acqId: string) =>
+    request<void>(`/api/ma/acquisitions/${acqId}/mapping`, { method: "DELETE" }),
 
   downloadMAReport: async (acqId: string, acqName: string) => {
     const headers = new Headers();
