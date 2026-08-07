@@ -41,6 +41,7 @@ function MappingStage({ acqId, acqName }: { acqId: string; acqName: string }) {
   const [resetting, setResetting] = useState(false);
   const [error, setError] = useState("");
   const [lastUpload, setLastUpload] = useState<MAMappingStatus | null>(null);
+  const [uploadProgress, setUploadProgress] = useState<{ current: number; total: number; file: string } | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const { data: status, isLoading: statusLoading } = useQuery<MAMappingStatus>({
@@ -65,17 +66,28 @@ function MappingStage({ acqId, acqName }: { acqId: string; acqName: string }) {
     setUploading(true);
     setError("");
     setLastUpload(null);
-    try {
-      const result = await api.addMappingFiles(acqId, files);
-      setFiles([]);
-      setLastUpload(result);
-      queryClient.invalidateQueries({ queryKey: ["mapping-status", acqId] });
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "Upload failed.";
-      setError(`Upload failed: ${msg}`);
-    } finally {
-      setUploading(false);
+    setUploadProgress(null);
+
+    let lastResult: MAMappingStatus | null = null;
+    const errors: string[] = [];
+
+    for (let i = 0; i < files.length; i++) {
+      const f = files[i];
+      setUploadProgress({ current: i + 1, total: files.length, file: f.name });
+      try {
+        lastResult = await api.addMappingFiles(acqId, [f]);
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : "Unknown error";
+        errors.push(`${f.name}: ${msg}`);
+      }
     }
+
+    setUploadProgress(null);
+    setFiles([]);
+    if (lastResult) setLastUpload(lastResult);
+    if (errors.length) setError(`Some files failed:\n${errors.join("\n")}`);
+    queryClient.invalidateQueries({ queryKey: ["mapping-status", acqId] });
+    setUploading(false);
   }
 
   async function handleDownload() {
@@ -279,13 +291,20 @@ function MappingStage({ acqId, acqName }: { acqId: string; acqName: string }) {
       {files.length > 0 && (() => {
         const overLimit = files.reduce((s, f) => s + f.size, 0) > 500 * 1024 * 1024;
         return (
-          <div className="flex gap-2">
-            <Button onClick={handleUpload} disabled={uploading || overLimit}>
-              {uploading
-                ? <span className="flex items-center gap-2"><Spinner className="h-4 w-4" /> Uploading…</span>
-                : hasExistingData ? "Add to mapping" : "Build mapping"}
-            </Button>
-            <Button variant="secondary" onClick={() => setFiles([])}>Clear</Button>
+          <div className="space-y-2">
+            {uploadProgress && (
+              <p className="text-xs text-muted">
+                Uploading {uploadProgress.current}/{uploadProgress.total}: <span className="font-mono">{uploadProgress.file}</span>
+              </p>
+            )}
+            <div className="flex gap-2">
+              <Button onClick={handleUpload} disabled={uploading || overLimit}>
+                {uploading
+                  ? <span className="flex items-center gap-2"><Spinner className="h-4 w-4" /> Uploading…</span>
+                  : hasExistingData ? "Add to mapping" : "Build mapping"}
+              </Button>
+              <Button variant="secondary" onClick={() => setFiles([])} disabled={uploading}>Clear</Button>
+            </div>
           </div>
         );
       })()}
