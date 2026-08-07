@@ -465,16 +465,28 @@ def _check_cross_sheet_isrcs(
 # Main entry point
 # ---------------------------------------------------------------------------
 
+def _load_csv_bytes(data: bytes, name: str) -> tuple[str, pd.DataFrame] | None:
+    for enc in ("utf-8-sig", "utf-8", "latin-1", "cp1252"):
+        try:
+            import io as _io
+            df = pd.read_csv(_io.BytesIO(data), header=0, encoding=enc, low_memory=False)
+            df = df.dropna(how="all", axis=1).dropna(how="all", axis=0)
+            df.columns = [str(c).strip() for c in df.columns]
+            return (name, df)
+        except UnicodeDecodeError:
+            continue
+    return None
+
+
 def _load_sheets(input_path: Path) -> list[tuple[str, pd.DataFrame]]:
     """
-    Load all data sheets from an Excel or CSV file.
+    Load all data sheets from an Excel, CSV, or ZIP file.
     Returns a list of (sheet_name, DataFrame) tuples.
-    CSV files are treated as a single sheet named after the file stem.
+    ZIP files are unpacked and each contained CSV/XLSX is scanned.
     """
     suffix = input_path.suffix.lower()
 
     if suffix == ".csv":
-        # Try common encodings so mis-encoded exports don't crash.
         for enc in ("utf-8-sig", "utf-8", "latin-1", "cp1252"):
             try:
                 df = pd.read_csv(input_path, header=0, encoding=enc, low_memory=False)
@@ -485,13 +497,62 @@ def _load_sheets(input_path: Path) -> list[tuple[str, pd.DataFrame]]:
                 continue
         return []
 
+    if suffix == ".zip":
+        import zipfile as _zf
+        sheets = []
+        SKIP_SHEET_HINTS = {"dropdown", "dropdowns", "notes", "instructions", "legend", "ref", "lookup", "source guide"}
+        try:
+            with _zf.ZipFile(input_path) as z:
+                for entry in z.infolist():
+                    if entry.file_size == 0:
+                        continue
+                    fn = entry.filename
+                    fn_lower = fn.lower()
+                    # Skip macOS metadata and hidden files
+                    if "__macosx" in fn_lower or fn_lower.startswith("."):
+                        continue
+                    stem = Path(fn).stem
+                    ext = Path(fn).suffix.lower()
+                    if ext == ".csv":
+                        try:
+                            data = z.read(fn)
+                            result = _load_csv_bytes(data, stem)
+                            if result:
+                                sheets.append(result)
+                        except Exception:
+                            continue
+                    elif ext == ".xlsx":
+                        try:
+                            import io as _io
+                            from openpyxl import load_workbook as _lw
+                            data = z.read(fn)
+                            wb = _lw(_io.BytesIO(data), read_only=True, data_only=True)
+                            wb_sheets = wb.sheetnames
+                            wb.close()
+                            for sheet_name in wb_sheets:
+                                if any(h in sheet_name.lower() for h in SKIP_SHEET_HINTS):
+                                    continue
+                                try:
+                                    df = pd.read_excel(_io.BytesIO(data), sheet_name=sheet_name, header=0)
+                                    df = df.dropna(how="all", axis=1).dropna(how="all", axis=0)
+                                    df.columns = [str(c).strip() for c in df.columns]
+                                    label = f"{stem} › {sheet_name}" if len(wb_sheets) > 1 else stem
+                                    sheets.append((label, df))
+                                except Exception:
+                                    continue
+                        except Exception:
+                            continue
+        except Exception:
+            pass
+        return sheets
+
     # Excel: load sheet names without reading data first.
     from openpyxl import load_workbook as _lw
     wb = _lw(input_path, read_only=True, data_only=True)
     sheet_names = wb.sheetnames
     wb.close()
 
-    SKIP_SHEET_HINTS = {"dropdown", "dropdowns", "notes", "instructions", "legend", "ref", "lookup"}
+    SKIP_SHEET_HINTS = {"dropdown", "dropdowns", "notes", "instructions", "legend", "ref", "lookup", "source guide"}
     sheets = []
     for sheet_name in sheet_names:
         if any(hint in sheet_name.lower() for hint in SKIP_SHEET_HINTS):

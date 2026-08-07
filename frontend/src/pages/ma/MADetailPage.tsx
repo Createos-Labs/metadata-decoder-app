@@ -58,7 +58,10 @@ function MappingStage({ acqId, acqName }: { acqId: string; acqName: string }) {
     return acc;
   }, {});
 
-  const hasRequired = grouped["catalog"]?.length > 0 && grouped["isrc_links"]?.length > 0;
+  const hasCatalog = (grouped["catalog"]?.length ?? 0) > 0;
+  const hasLinks = (grouped["isrc_links"]?.length ?? 0) > 0;
+  const missingRequired = (!hasCatalog ? ["Products/Tracks catalog"] : [])
+    .concat(!hasLinks ? ["Contracts w/Albums & Tracks"] : []);
 
   async function handleGenerate() {
     setLoading(true);
@@ -123,10 +126,10 @@ function MappingStage({ acqId, acqName }: { acqId: string; acqName: string }) {
           onChange={e => addFiles(e.target.files)}
         />
         <p className="text-sm font-medium text-ink">
-          Drop all your export files here or click to select
+          Drop your export files here — add as many as you have
         </p>
         <p className="mt-1 text-xs text-muted">
-          Accepts .xlsx, .xls, .csv, .zip — add as many files as you have
+          Accepts .xlsx, .xls, .csv, .zip — upload what you have now and regenerate as more files arrive
         </p>
       </div>
 
@@ -181,15 +184,11 @@ function MappingStage({ acqId, acqName }: { acqId: string; acqName: string }) {
         </Card>
       )}
 
-      {/* Required files checklist */}
-      {files.length > 0 && (
-        <div className="flex gap-4 text-xs">
-          {["catalog", "isrc_links"].map(t => (
-            <span key={t} className={`flex items-center gap-1 ${grouped[t]?.length > 0 ? "text-emerald-700" : "text-rose-600"}`}>
-              {grouped[t]?.length > 0 ? "✓" : "✗"} {DETECTED_TYPES[t].label}
-            </span>
-          ))}
-        </div>
+      {/* Soft warning for missing files */}
+      {files.length > 0 && missingRequired.length > 0 && (
+        <p className="rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-700">
+          <span className="font-medium">Heads up:</span> {missingRequired.join(" and ")} not detected — the template will generate with the files you have, but those columns will be blank. You can add the missing files and regenerate any time.
+        </p>
       )}
 
       {error && (
@@ -205,7 +204,7 @@ function MappingStage({ acqId, acqName }: { acqId: string; acqName: string }) {
       <div className="flex gap-2">
         <Button
           onClick={handleGenerate}
-          disabled={!hasRequired || loading || files.length === 0}
+          disabled={loading || files.length === 0}
         >
           {loading ? (
             <span className="flex items-center gap-2">
@@ -253,8 +252,8 @@ function UploadZone({ acqId, onUploaded }: { acqId: string; onUploaded: () => vo
 
   async function handleFile(file: File) {
     const name = file.name.toLowerCase();
-    if (!name.endsWith(".xlsx") && !name.endsWith(".csv")) {
-      setError("Please upload an .xlsx or .csv file.");
+    if (!name.endsWith(".xlsx") && !name.endsWith(".csv") && !name.endsWith(".zip")) {
+      setError("Please upload an .xlsx, .csv, or .zip file.");
       return;
     }
     setLoading(true);
@@ -298,8 +297,8 @@ function UploadZone({ acqId, onUploaded }: { acqId: string; onUploaded: () => vo
         </div>
       ) : (
         <>
-          <p className="text-sm font-medium text-ink">Drop an .xlsx or .csv file here or click to upload</p>
-          <p className="mt-1 text-xs text-muted">All sheets will be scanned automatically</p>
+          <p className="text-sm font-medium text-ink">Drop an .xlsx, .csv, or .zip file here or click to upload</p>
+          <p className="mt-1 text-xs text-muted">ZIP files will be unpacked — all sheets scanned automatically</p>
         </>
       )}
       {error && <p className="mt-2 text-xs text-red-600">{error}</p>}

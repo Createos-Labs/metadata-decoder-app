@@ -97,8 +97,8 @@ async def upload_ma_scan(
     settings: Settings = Depends(get_settings),
 ) -> dict:
     name = file.filename or "file.xlsx"
-    if not (name.lower().endswith(".xlsx") or name.lower().endswith(".csv")):
-        raise HTTPException(status_code=400, detail="Please upload an .xlsx or .csv file.")
+    if not any(name.lower().endswith(ext) for ext in (".xlsx", ".csv", ".zip")):
+        raise HTTPException(status_code=400, detail="Please upload an .xlsx, .csv, or .zip file.")
     data = await file.read()
     if not data:
         raise HTTPException(status_code=400, detail="Uploaded file is empty.")
@@ -203,15 +203,10 @@ async def generate_mapping(
         else:
             unknown_files.append(name)
 
-    if "catalog" not in classified or "isrc_links" not in classified:
-        missing = []
-        if "catalog" not in classified:
-            missing.append("Products/Tracks catalog export (.xlsx)")
-        if "isrc_links" not in classified:
-            missing.append("Contracts w/Albums & Tracks export (.xls)")
+    if not classified:
         raise HTTPException(
             status_code=422,
-            detail=f"Missing required files: {'; '.join(missing)}. "
+            detail="No recognisable export files found. "
                    f"Unrecognised files: {unknown_files or 'none'}.",
         )
 
