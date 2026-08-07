@@ -191,55 +191,86 @@ function MappingStage({ acqId, acqName }: { acqId: string; acqName: string }) {
       </div>
 
       {/* Staged files */}
-      {files.length > 0 && (
-        <Card className="overflow-hidden p-0">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-slate-200 bg-slate-50">
-                <th className="px-4 py-2 text-left text-xs font-medium text-muted">File</th>
-                <th className="px-4 py-2 text-left text-xs font-medium text-muted">Detected type</th>
-                <th className="px-4 py-2 text-left text-xs font-medium text-muted">Required?</th>
-                <th className="px-4 py-2" />
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {files.map(f => {
-                const t = detectType(f.name);
-                const info = DETECTED_TYPES[t] ?? DETECTED_TYPES["unknown"];
-                return (
-                  <tr key={f.name} className="hover:bg-slate-50">
-                    <td className="px-4 py-2 font-mono text-xs text-ink">{f.name}</td>
-                    <td className="px-4 py-2">
-                      <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${t === "unknown" ? "bg-slate-100 text-slate-500" : "bg-emerald-50 text-emerald-700"}`}>
-                        {info.label}
-                      </span>
-                    </td>
-                    <td className="px-4 py-2 text-xs">
-                      {info.required ? <span className="font-medium text-rose-600">Required</span> : <span className="text-slate-400">Optional</span>}
-                    </td>
-                    <td className="px-4 py-2 text-right">
-                      <button onClick={e => { e.stopPropagation(); setFiles(p => p.filter(x => x.name !== f.name)); }} className="text-xs text-muted hover:text-red-600">Remove</button>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </Card>
-      )}
+      {files.length > 0 && (() => {
+        const LIMIT_BYTES = 500 * 1024 * 1024;
+        const totalBytes = files.reduce((s, f) => s + f.size, 0);
+        const pct = Math.min(totalBytes / LIMIT_BYTES, 1);
+        const over = totalBytes > LIMIT_BYTES;
+        const fmt = (b: number) => b >= 1024 * 1024
+          ? `${(b / (1024 * 1024)).toFixed(1)} MB`
+          : `${(b / 1024).toFixed(0)} KB`;
+        return (
+          <Card className="overflow-hidden p-0">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-slate-200 bg-slate-50">
+                  <th className="px-4 py-2 text-left text-xs font-medium text-muted">File</th>
+                  <th className="px-4 py-2 text-left text-xs font-medium text-muted">Size</th>
+                  <th className="px-4 py-2 text-left text-xs font-medium text-muted">Detected type</th>
+                  <th className="px-4 py-2 text-left text-xs font-medium text-muted">Required?</th>
+                  <th className="px-4 py-2" />
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {files.map(f => {
+                  const t = detectType(f.name);
+                  const info = DETECTED_TYPES[t] ?? DETECTED_TYPES["unknown"];
+                  return (
+                    <tr key={f.name} className="hover:bg-slate-50">
+                      <td className="px-4 py-2 font-mono text-xs text-ink">{f.name}</td>
+                      <td className="px-4 py-2 text-xs text-muted tabular-nums">{fmt(f.size)}</td>
+                      <td className="px-4 py-2">
+                        <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${t === "unknown" ? "bg-slate-100 text-slate-500" : "bg-emerald-50 text-emerald-700"}`}>
+                          {info.label}
+                        </span>
+                      </td>
+                      <td className="px-4 py-2 text-xs">
+                        {info.required ? <span className="font-medium text-rose-600">Required</span> : <span className="text-slate-400">Optional</span>}
+                      </td>
+                      <td className="px-4 py-2 text-right">
+                        <button onClick={e => { e.stopPropagation(); setFiles(p => p.filter(x => x.name !== f.name)); }} className="text-xs text-muted hover:text-red-600">Remove</button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+            {/* Upload size meter */}
+            <div className={`border-t px-4 py-3 ${over ? "bg-red-50" : pct > 0.8 ? "bg-amber-50" : "bg-slate-50"}`}>
+              <div className="mb-1.5 flex items-center justify-between text-xs">
+                <span className={`font-medium ${over ? "text-red-700" : pct > 0.8 ? "text-amber-700" : "text-muted"}`}>
+                  {over
+                    ? `Over limit — remove ${fmt(totalBytes - LIMIT_BYTES)} to continue`
+                    : `${fmt(totalBytes)} / 500 MB`}
+                </span>
+                <span className="text-slate-400">{Math.round(pct * 100)}%</span>
+              </div>
+              <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-200">
+                <div
+                  className={`h-full rounded-full transition-all ${over ? "bg-red-500" : pct > 0.8 ? "bg-amber-400" : "bg-emerald-500"}`}
+                  style={{ width: `${Math.round(pct * 100)}%` }}
+                />
+              </div>
+            </div>
+          </Card>
+        );
+      })()}
 
       {error && <p className="rounded-md bg-red-50 px-3 py-2 text-xs text-red-700">{error}</p>}
 
-      {files.length > 0 && (
-        <div className="flex gap-2">
-          <Button onClick={handleUpload} disabled={uploading}>
-            {uploading
-              ? <span className="flex items-center gap-2"><Spinner className="h-4 w-4" /> Uploading…</span>
-              : hasExistingData ? "Add to mapping & download" : "Build mapping & download"}
-          </Button>
-          <Button variant="secondary" onClick={() => setFiles([])}>Clear</Button>
-        </div>
-      )}
+      {files.length > 0 && (() => {
+        const overLimit = files.reduce((s, f) => s + f.size, 0) > 500 * 1024 * 1024;
+        return (
+          <div className="flex gap-2">
+            <Button onClick={handleUpload} disabled={uploading || overLimit}>
+              {uploading
+                ? <span className="flex items-center gap-2"><Spinner className="h-4 w-4" /> Uploading…</span>
+                : hasExistingData ? "Add to mapping & download" : "Build mapping & download"}
+            </Button>
+            <Button variant="secondary" onClick={() => setFiles([])}>Clear</Button>
+          </div>
+        );
+      })()}
     </div>
   );
 }
