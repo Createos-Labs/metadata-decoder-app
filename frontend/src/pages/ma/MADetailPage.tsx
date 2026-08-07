@@ -64,7 +64,7 @@ function MappingStage({ acqId, acqName }: { acqId: string; acqName: string }) {
     setUploading(true);
     setError("");
     try {
-      await api.addMappingFiles(acqId, files, acqName);
+      await api.addMappingFiles(acqId, files);
       setFiles([]);
       queryClient.invalidateQueries({ queryKey: ["mapping-status", acqId] });
     } catch (err: unknown) {
@@ -167,8 +167,8 @@ function MappingStage({ acqId, acqName }: { acqId: string; acqName: string }) {
               </ul>
             </details>
           )}
-          <Button onClick={handleDownload} disabled={downloading} variant="secondary">
-            {downloading ? <span className="flex items-center gap-2"><Spinner className="h-4 w-4" /> Downloading…</span> : "Download current mapping"}
+          <Button onClick={handleDownload} disabled={downloading}>
+            {downloading ? <span className="flex items-center gap-2"><Spinner className="h-4 w-4" /> Generating XLSX…</span> : "Download mapping"}
           </Button>
         </Card>
       )}
@@ -258,6 +258,11 @@ function MappingStage({ acqId, acqName }: { acqId: string; acqName: string }) {
 
       {error && <p className="rounded-md bg-red-50 px-3 py-2 text-xs text-red-700">{error}</p>}
 
+      {/* Persistent download — visible whenever state exists, even with no staged files */}
+      {!hasExistingData && !statusLoading && files.length === 0 && (
+        <p className="text-xs text-muted">Upload your catalog exports to start building the mapping.</p>
+      )}
+
       {files.length > 0 && (() => {
         const overLimit = files.reduce((s, f) => s + f.size, 0) > 500 * 1024 * 1024;
         return (
@@ -265,7 +270,7 @@ function MappingStage({ acqId, acqName }: { acqId: string; acqName: string }) {
             <Button onClick={handleUpload} disabled={uploading || overLimit}>
               {uploading
                 ? <span className="flex items-center gap-2"><Spinner className="h-4 w-4" /> Uploading…</span>
-                : hasExistingData ? "Add to mapping & download" : "Build mapping & download"}
+                : hasExistingData ? "Add to mapping" : "Build mapping"}
             </Button>
             <Button variant="secondary" onClick={() => setFiles([])}>Clear</Button>
           </div>

@@ -131,7 +131,7 @@ export const api = {
     URL.revokeObjectURL(url);
   },
 
-  addMappingFiles: async (acqId: string, files: File[], acqName: string): Promise<void> => {
+  addMappingFiles: async (acqId: string, files: File[]): Promise<import("./types").MAMappingStatus> => {
     const headers = new Headers();
     if (authToken) headers.set("Authorization", `Bearer ${authToken}`);
     const form = new FormData();
@@ -146,16 +146,7 @@ export const api = {
       try { const b = await res.json(); detail = b.detail ?? detail; } catch { /* non-JSON */ }
       throw new ApiError(res.status, detail);
     }
-    const blob = await res.blob();
-    const safe = acqName.replace(/[/\\]/g, "-").slice(0, 50);
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `MA Mapping Template - ${safe}.xlsx`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
+    return res.json();
   },
 
   downloadCurrentMapping: async (acqId: string, acqName: string): Promise<void> => {

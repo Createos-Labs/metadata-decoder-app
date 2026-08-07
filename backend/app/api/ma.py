@@ -227,17 +227,10 @@ async def add_mapping_files(
         state = svc.get_mapping_state(acq_id)
         bm.apply_files_to_state(state, classified, source_filenames)
         svc.save_mapping_state(acq_id, state)
-        xlsx_bytes = bm.render_state_to_xlsx(state)
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Mapping generation failed: {exc}")
+        raise HTTPException(status_code=500, detail=f"Failed to process files: {exc}")
 
-    safe_name = acq["name"].replace("/", "-").replace("\\", "-")[:50]
-    filename = f"MA Mapping Template - {safe_name}.xlsx"
-    return StreamingResponse(
-        io.BytesIO(xlsx_bytes),
-        media_type=XLSX_MIME,
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-    )
+    return bm.state_summary(state)
 
 
 @router.get("/acquisitions/{acq_id}/mapping")
