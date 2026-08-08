@@ -286,8 +286,8 @@ function MappingStage({ acqId, acqName }: { acqId: string; acqName: string }) {
                       <td className="px-4 py-2 font-mono text-xs text-ink">{f.name}</td>
                       <td className="px-4 py-2 text-xs text-muted tabular-nums">{fmt(f.size)}</td>
                       <td className="px-4 py-2">
-                        <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${t === "unknown" ? "bg-slate-100 text-slate-500" : "bg-emerald-50 text-emerald-700"}`}>
-                          {info.label}
+                        <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${t === "unknown" ? "bg-amber-50 text-amber-600" : "bg-emerald-50 text-emerald-700"}`}>
+                          {t === "unknown" ? "Auto-detecting…" : info.label}
                         </span>
                       </td>
                       <td className="px-4 py-2 text-xs">

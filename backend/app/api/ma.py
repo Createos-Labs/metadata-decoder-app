@@ -204,7 +204,7 @@ async def add_mapping_files(
         data = await upload.read()
         if not data:
             continue
-        ftype = bm.detect_file_type(name)
+        ftype = bm.detect_file_type(name, data=data)
         if ftype in ("statement_zip", "statement_csv", "statement_xlsx"):
             classified.setdefault(ftype, [])
             classified[ftype].append(data)
@@ -219,8 +219,11 @@ async def add_mapping_files(
     if not classified:
         raise HTTPException(
             status_code=422,
-            detail="No recognisable export files found. "
-                   f"Unrecognised files: {unknown_files or 'none'}.",
+            detail=(
+                "Could not identify any of the uploaded files. "
+                "Checked both filename patterns and column headers. "
+                f"Files tried: {unknown_files or 'none'}."
+            ),
         )
 
     try:

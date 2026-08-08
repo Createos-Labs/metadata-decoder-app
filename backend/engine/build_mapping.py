@@ -171,11 +171,84 @@ PCT_FORMAT = '0.00"%"'
 # File type detection
 # ---------------------------------------------------------------------------
 
-def detect_file_type(filename: str) -> str:
+# ---------------------------------------------------------------------------
+# Header fingerprints — (file_type, keyword_substrings, min_matches_required)
+# Ordered most-specific first; substring matches against any header value.
+# ---------------------------------------------------------------------------
+_HEADER_FINGERPRINTS: list[tuple[str, list[str], int]] = [
+    ("catalog",           ["p-line", "isrc", "upc", "track-title", "album-title"], 3),
+    ("isrc_links",        ["track-isrc", "proration", "cross-collateralize"],       2),
+    ("contract_terms",    ["reserve-rate", "term-start", "rate-type", "contract-title"], 3),
+    ("statement_csv",     ["sale date", "net payable", "contract name"],            3),
+    ("orchard_contracts", ["royalty split", "remaining terms", "license period"],   2),
+    ("statement_xlsx",    ["contract name", "net payable"],                         2),
+    ("advance_balances",  ["advance balance", "advance balances"],                  1),
+]
+
+
+def _read_file_headers(data: bytes, filename: str) -> list[str]:
     """
-    Returns one of: 'catalog', 'contract_terms', 'isrc_links', 'payees',
-                    'statement_zip', 'statement_csv', 'statement_xlsx', 'unknown'
-    Based on Glassnote export filename conventions.
+    Read the first meaningful header row from an XLS, XLSX, or CSV file.
+    Returns a list of lowercase stripped strings. Checks up to the first 5 rows
+    per sheet and up to the first 4 sheets for multi-sheet workbooks.
+    """
+    n = filename.lower()
+    headers: list[str] = []
+    try:
+        if n.endswith(".csv"):
+            text = data[:8192].decode("utf-8-sig", errors="replace")
+            for line in text.splitlines():
+                vals = [h.strip().lower() for h in next(csv.reader([line]), [])]
+                if sum(1 for v in vals if v) >= 2:
+                    headers = vals
+                    break
+        elif n.endswith(".xls"):
+            wb = xlrd.open_workbook(file_contents=data)
+            for sheet in wb.sheets()[:4]:
+                for r in range(min(5, sheet.nrows)):
+                    row = [str(sheet.cell_value(r, c)).strip().lower()
+                           for c in range(sheet.ncols)]
+                    if sum(1 for v in row if v) >= 2:
+                        headers.extend(row)
+                        break
+                if headers:
+                    break
+        elif n.endswith(".xlsx"):
+            wb = openpyxl.load_workbook(
+                io.BytesIO(data), read_only=True, data_only=True
+            )
+            for sheet_name in wb.sheetnames[:4]:
+                ws = wb[sheet_name]
+                for row in ws.iter_rows(min_row=1, max_row=5, values_only=True):
+                    vals = [str(v).strip().lower() for v in row if v is not None]
+                    if sum(1 for v in vals if v) >= 2:
+                        headers.extend(vals)
+                        break
+                if headers:
+                    break
+            wb.close()
+    except Exception:
+        pass
+    return headers
+
+
+def _detect_by_headers(data: bytes, filename: str) -> str:
+    """Return a file type by matching column headers against known fingerprints."""
+    headers = _read_file_headers(data, filename)
+    if not headers:
+        return "unknown"
+    for ftype, keywords, min_score in _HEADER_FINGERPRINTS:
+        score = sum(1 for kw in keywords if any(kw in h for h in headers))
+        if score >= min_score:
+            return ftype
+    return "unknown"
+
+
+def detect_file_type(filename: str, data: bytes | None = None) -> str:
+    """
+    Detect file type from filename patterns first, then fall back to header
+    fingerprinting if the filename gives no match. Passing ``data`` enables
+    the header fallback and makes detection robust to file renames.
     """
     n = filename.lower()
     if n.endswith(".zip"):
@@ -196,6 +269,9 @@ def detect_file_type(filename: str) -> str:
         return "orchard_contracts"
     if "connection advance" in n or ("advance" in n and "balance" in n):
         return "advance_balances"
+    # Filename gave no match — try reading the headers
+    if data is not None:
+        return _detect_by_headers(data, filename)
     return "unknown"
 
 
