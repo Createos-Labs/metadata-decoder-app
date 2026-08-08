@@ -10,14 +10,16 @@ import { Button, Card, Spinner, Toast } from "../../components/ui";
 // ---------------------------------------------------------------------------
 
 const DETECTED_TYPES: Record<string, { label: string; required: boolean }> = {
-  catalog:        { label: "Products / Tracks catalog",    required: true  },
-  isrc_links:     { label: "Contracts w/ Albums & Tracks", required: true  },
-  contract_terms: { label: "Contracts Terms",              required: false },
-  payees:         { label: "Payees",                       required: false },
-  statement_zip:  { label: "Statement ZIP",                required: false },
-  statement_csv:  { label: "Statement CSV",                required: false },
-  statement_xlsx: { label: "Orchard Statement XLSX",       required: false },
-  unknown:        { label: "Unrecognised",                 required: false },
+  catalog:           { label: "Products / Tracks catalog",    required: true  },
+  isrc_links:        { label: "Contracts w/ Albums & Tracks", required: true  },
+  contract_terms:    { label: "Contracts Terms",              required: false },
+  payees:            { label: "Payees",                       required: false },
+  statement_zip:     { label: "Statement ZIP",                required: false },
+  statement_csv:     { label: "Statement CSV",                required: false },
+  statement_xlsx:    { label: "Orchard Statement XLSX",       required: false },
+  orchard_contracts: { label: "Orchard Contract Summary",     required: false },
+  advance_balances:  { label: "Advance Balances",             required: false },
+  unknown:           { label: "Unrecognised",                 required: false },
 };
 
 function detectType(filename: string): string {
@@ -29,6 +31,8 @@ function detectType(filename: string): string {
   if (n.includes("product") || (n.includes("track") && !n.includes("contract"))) return "catalog";
   if (n.endsWith(".csv")) return "statement_csv";
   if (n.endsWith(".xlsx") && (n.includes("fullreport") || n.includes("revenue_details"))) return "statement_xlsx";
+  if (n.includes("remaining term") || n.includes("contracts and remaining")) return "orchard_contracts";
+  if (n.includes("connection advance") || (n.includes("advance") && n.includes("balance"))) return "advance_balances";
   return "unknown";
 }
 
@@ -157,7 +161,8 @@ function MappingStage({ acqId, acqName }: { acqId: string; acqName: string }) {
   const TYPE_LABEL: Record<string, string> = {
     catalog: "Catalog", isrc_links: "Contracts w/Albums", contract_terms: "Contract Terms",
     payees: "Payees", statement_zip: "Statement ZIP", statement_csv: "Statement CSV",
-    statement_xlsx: "Orchard XLSX", unknown: "Unrecognised",
+    statement_xlsx: "Orchard XLSX", orchard_contracts: "Orchard Contracts",
+    advance_balances: "Advance Balances", unknown: "Unrecognised",
   };
 
   return (
@@ -197,6 +202,16 @@ function MappingStage({ acqId, acqName }: { acqId: string; acqName: string }) {
             <span className={`rounded-full px-2.5 py-1 font-medium ${status.has_contract_terms ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-500"}`}>
               {status.has_contract_terms ? `✓ Contract Terms (${status.contract_count})` : "No contract terms yet"}
             </span>
+            {status.has_orchard_contracts && (
+              <span className="rounded-full bg-emerald-100 px-2.5 py-1 font-medium text-emerald-700">
+                ✓ Orchard Contracts ({status.orchard_artist_count} artists)
+              </span>
+            )}
+            {status.has_advance_balances && (
+              <span className="rounded-full bg-emerald-100 px-2.5 py-1 font-medium text-emerald-700">
+                ✓ Advance Balances
+              </span>
+            )}
             {status.stmt_files_processed > 0 && (
               <span className="rounded-full bg-emerald-100 px-2.5 py-1 font-medium text-emerald-700">
                 ✓ {status.stmt_files_processed} statement file{status.stmt_files_processed !== 1 ? "s" : ""}

@@ -192,6 +192,10 @@ def detect_file_type(filename: str) -> str:
         return "statement_csv"
     if n.endswith(".xlsx") and ("fullreport" in n or "revenue_details" in n):
         return "statement_xlsx"
+    if "remaining term" in n or "contracts and remaining" in n:
+        return "orchard_contracts"
+    if "connection advance" in n or ("advance" in n and "balance" in n):
+        return "advance_balances"
     return "unknown"
 
 
@@ -464,6 +468,88 @@ def load_statement_xlsx(data: bytes, filename: str, best_balance: dict) -> int:
         return 0
 
 
+def load_orchard_contracts(data: bytes) -> dict:
+    """
+    Parse 'Contracts and Remaining Term' summary XLSX.
+    Returns {artist_name_lower: {type, contract_date, territory, royalty_split,
+                                  profit_share_pct, expiration_date, notes}}
+    """
+    import re as _re
+    result: dict = {}
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(data), data_only=True, read_only=True)
+        ws = wb.active
+        rows_iter = ws.iter_rows(values_only=True)
+        header = next(rows_iter, None)
+        if not header:
+            wb.close()
+            return result
+        hdrs = {str(v).strip().lower(): i for i, v in enumerate(header) if v is not None}
+        skip_values = {"future revenue stream", "catalog", "connection", "total", "artist", ""}
+        for row in rows_iter:
+            artist = str(row[hdrs.get("artist", 0)] or "").strip()
+            if not artist or artist.lower() in skip_values:
+                continue
+            # Parse royalty_split like "50% Net Proceeds" → 50.0
+            royalty_raw = str(row[hdrs.get("royalty split", -1)] or "") if hdrs.get("royalty split") is not None else ""
+            pct_match = _re.search(r"(\d+(?:\.\d+)?)\s*%", royalty_raw)
+            profit_share_pct = float(pct_match.group(1)) if pct_match else ""
+
+            def _date(col_name: str):
+                idx = hdrs.get(col_name)
+                if idx is None:
+                    return ""
+                v = row[idx]
+                if v is None:
+                    return ""
+                if hasattr(v, "strftime"):
+                    return v.strftime("%Y-%m-%d")
+                return str(v).strip()
+
+            result[artist.lower()] = {
+                "artist": artist,
+                "type": str(row[hdrs.get("type", -1)] or "").strip() if hdrs.get("type") is not None else "",
+                "contract_date": _date("contract date"),
+                "territory": str(row[hdrs.get("territory", -1)] or "").strip() if hdrs.get("territory") is not None else "",
+                "royalty_split": royalty_raw.strip(),
+                "profit_share_pct": profit_share_pct,
+                "expiration_date": _date("licensing period expiration") or _date("licence period experation") or _date("trigger date"),
+                "notes": str(row[hdrs.get("notes:", -1)] or "").strip() if hdrs.get("notes:") is not None else "",
+            }
+        wb.close()
+    except Exception:
+        pass
+    return result
+
+
+def load_advance_balances(data: bytes) -> dict:
+    """
+    Parse a simple two-column advance balances XLSX (Name | Amount).
+    Skips header/title rows. Returns {name_lower: balance_float}.
+    """
+    result: dict = {}
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(data), data_only=True, read_only=True)
+        ws = wb.active
+        for row in ws.iter_rows(values_only=True):
+            name = row[0] if row else None
+            val = row[1] if len(row) > 1 else None
+            if not name or val is None:
+                continue
+            name_str = str(name).strip()
+            if not name_str:
+                continue
+            try:
+                balance = float(val)
+            except (ValueError, TypeError):
+                continue
+            result[name_str.lower()] = {"name": name_str, "balance": balance}
+        wb.close()
+    except Exception:
+        pass
+    return result
+
+
 def _period_rank(p: str) -> int:
     return {"1h23": 1, "2h23": 2, "1h24": 3, "2h24": 4, "1h25": 5}.get(
         str(p).lower().strip(), 0
@@ -576,6 +662,8 @@ def _build_data_rows(
     links: list[dict],
     net_by: dict,
     best_balance: dict,
+    orchard_contracts: dict | None = None,
+    advance_balances: dict | None = None,
 ) -> list[tuple]:
     def latest_net(contract: str, isrc: str):
         key = isrc or "__release__"
@@ -633,6 +721,33 @@ def _build_data_rows(
                 fb, fp = fallback_balance(payee)
                 bal_str = f"{fb}  ({fp})" if fb != "" else ""
 
+            # Orchard contract summary — look up by artist name (case-insensitive)
+            artist_name = str(link.get("artist", "") or track.get("primary-track-artist", "") or "").strip()
+            oc: dict = {}
+            if orchard_contracts:
+                oc = orchard_contracts.get(artist_name.lower(), {})
+                if not oc:
+                    # Partial match: artist key starts with or is contained in artist_name
+                    for k, v in orchard_contracts.items():
+                        if artist_name.lower().startswith(k) or k.startswith(artist_name.lower()):
+                            oc = v
+                            break
+
+            # Advance balance — look up by payee name (case-insensitive)
+            advance_str = ""
+            if advance_balances and payee:
+                ab = advance_balances.get(payee.lower(), {})
+                if ab:
+                    advance_str = str(ab.get("balance", ""))
+
+            # Prefer terms-export dates; fall back to orchard contract dates
+            contract_start = td or oc.get("contract_date", "")
+            contract_end = te or oc.get("expiration_date", "")
+            territory = term.get("region", "") or oc.get("territory", "")
+            contract_type = term.get("rate-type", "") or oc.get("type", "")
+            profit_share = oc.get("profit_share_pct", "") if oc else ""
+            notes = term.get("comments", "") or oc.get("notes", "")
+
             rows.append((
                 isrc,
                 track.get("track-title", "") or link.get("track-title", ""),
@@ -649,21 +764,21 @@ def _build_data_rows(
                 term.get("price", ""),
                 "",  # Catalogue Group
                 track.get("full-price (usd)", ""),
-                link.get("artist", "") or track.get("primary-track-artist", ""),
+                artist_name,
                 contract,
                 proration,  # Track Sales Contract %
                 contract,   # Track Costs Contract Name
                 proration,  # Track Costs Contract %
                 contract,
                 payee,
-                term.get("rate-type", ""),
+                contract_type,
                 "",  # Accounting Period
                 "USD",
-                "",  # Profit Share %
-                td,
-                te,
-                term.get("comments", ""),
-                term.get("region", ""),
+                profit_share,
+                contract_start,
+                contract_end,
+                notes,
+                territory,
                 term.get("channel", ""),
                 "",  # Rate Configuration
                 term.get("price", ""),
@@ -677,7 +792,7 @@ def _build_data_rows(
                 "",  # Esc. Threshold
                 "",  # Esc. Rate %
                 bal_str,
-                "",  # Advance Remaining
+                advance_str,
                 "",  # Min Payout
                 "",  # Deduct Withholding Tax
                 link.get("cross-collateralize", ""),
@@ -1139,9 +1254,11 @@ def empty_state() -> dict:
         "catalog": {},
         "contract_terms": {},
         "links": [],
-        "net_by": {},          # {contract: {isrc: {period: float}}}
-        "best_balance": {},    # {contract_lower: {balance, period, artist}}
-        "source_files": [],    # [[type, filename], ...]
+        "net_by": {},            # {contract: {isrc: {period: float}}}
+        "best_balance": {},      # {contract_lower: {balance, period, artist}}
+        "orchard_contracts": {}, # {artist_lower: {type, contract_date, ...}}
+        "advance_balances": {},  # {name_lower: {name, balance}}
+        "source_files": [],      # [[type, filename], ...]
         "stmt_files_processed": 0,
     }
 
@@ -1166,6 +1283,10 @@ def apply_files_to_state(
         state["contract_terms"] = load_contract_terms(files["contract_terms"])
     if "isrc_links" in files:
         state["links"] = load_isrc_links(files["isrc_links"])
+    if "orchard_contracts" in files:
+        state["orchard_contracts"] = load_orchard_contracts(files["orchard_contracts"])
+    if "advance_balances" in files:
+        state["advance_balances"] = load_advance_balances(files["advance_balances"])
 
     # --- Statement files: accumulate ---
     # Reconstruct mutable defaultdicts from stored plain dicts
@@ -1236,6 +1357,8 @@ def render_state_to_xlsx(state: dict) -> bytes:
         state.get("links", []),
         net_by,
         state.get("best_balance", {}),
+        orchard_contracts=state.get("orchard_contracts", {}),
+        advance_balances=state.get("advance_balances", {}),
     )
 
     stats = {
@@ -1272,8 +1395,11 @@ def state_summary(state: dict) -> dict:
         "has_catalog": bool(state.get("catalog")),
         "has_links": bool(state.get("links")),
         "has_contract_terms": bool(state.get("contract_terms")),
+        "has_orchard_contracts": bool(state.get("orchard_contracts")),
+        "has_advance_balances": bool(state.get("advance_balances")),
         "isrc_count": len(state.get("catalog", {})),
         "contract_count": len(state.get("contract_terms", {})),
+        "orchard_artist_count": len(state.get("orchard_contracts", {})),
         "stmt_files_processed": state.get("stmt_files_processed", 0),
         "contracts_with_balance": len(net_by) + len(state.get("best_balance", {})),
         "source_files": state.get("source_files", []),
