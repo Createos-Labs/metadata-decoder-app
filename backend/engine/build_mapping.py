@@ -628,6 +628,58 @@ def load_advance_balances(data: bytes) -> dict:
     return result
 
 
+def load_income_sources(data: bytes) -> dict:
+    """
+    Parse the Artist Contracts Income Sources / Expense Types export.
+    Returns {contract_title: {sync_rate, expense_types: [...], has_advances}}.
+    """
+    result: dict = {}
+    try:
+        # Try XLSX first, fall back to XLS
+        try:
+            wb = openpyxl.load_workbook(io.BytesIO(data), data_only=True, read_only=True)
+            ws = wb.active
+            rows_iter = ws.iter_rows(values_only=True)
+            raw_headers = next(rows_iter, [])
+            headers = [str(v).lower().strip() if v else "" for v in raw_headers]
+            raw_rows = [dict(zip(headers, row)) for row in rows_iter]
+            wb.close()
+        except Exception:
+            import xlrd as _xlrd
+            xwb = _xlrd.open_workbook(file_contents=data)
+            xws = xwb.sheet_by_index(0)
+            xh = [str(xws.cell_value(0, c)).lower().strip() for c in range(xws.ncols)]
+            raw_rows = [
+                {xh[c]: xws.cell_value(r, c) for c in range(xws.ncols)}
+                for r in range(1, xws.nrows)
+            ]
+
+        for row in raw_rows:
+            ct = str(row.get("contract-title", "") or "").strip()
+            if not ct:
+                continue
+            if ct not in result:
+                result[ct] = {"sync_rate": None, "expense_types": [], "has_advances": False}
+            st = str(row.get("source-type", "") or "").strip()
+            it = str(row.get("income-type", "") or "").strip()
+            rate = str(row.get("net-revenue-rate", "") or "").strip()
+            et = str(row.get("expense-type", "") or "").strip()
+
+            if st == "License Income" and it == "Synchronization" and rate:
+                try:
+                    result[ct]["sync_rate"] = float(rate)
+                except ValueError:
+                    pass
+            if st == "Recoupable Expense" and et:
+                if et not in result[ct]["expense_types"]:
+                    result[ct]["expense_types"].append(et)
+                if et == "Advances":
+                    result[ct]["has_advances"] = True
+    except Exception:
+        pass
+    return result
+
+
 def load_license_registry(data: bytes) -> dict:
     """
     Parse the 'All Releases Summary Info' style XLSX.
@@ -789,6 +841,7 @@ def _build_data_rows(
     orchard_contracts: dict | None = None,
     advance_balances: dict | None = None,
     license_registry: dict | None = None,
+    income_sources: dict | None = None,
 ) -> list[tuple]:
     def latest_net(contract: str, isrc: str):
         key = isrc or "__release__"
@@ -870,13 +923,21 @@ def _build_data_rows(
             if license_registry:
                 lr = license_registry.get(isrc.upper(), {})
 
+            # Income sources lookup by contract
+            iso: dict = {}
+            if income_sources:
+                iso = income_sources.get(contract, {})
+
             # Prefer terms-export dates; fall back to orchard contract dates; then license registry
             contract_start = td or oc.get("contract_date", "")
             contract_end = te or oc.get("expiration_date", "") or lr.get("expiration_date", "")
             territory = term.get("region", "") or oc.get("territory", "")
             contract_type = term.get("rate-type", "") or oc.get("type", "")
             profit_share = oc.get("profit_share_pct", "") if oc else ""
-            notes = term.get("comments", "") or oc.get("notes", "")
+            expense_note = ""
+            if iso.get("expense_types"):
+                expense_note = "Recoupable: " + ", ".join(iso["expense_types"])
+            notes = term.get("comments", "") or oc.get("notes", "") or expense_note
 
             rows.append((
                 isrc,
@@ -1389,6 +1450,7 @@ def empty_state() -> dict:
         "orchard_contracts": {}, # {artist_lower: {type, contract_date, ...}}
         "advance_balances": {},  # {name_lower: {name, balance}}
         "license_registry": {}, # {isrc_upper: {expiration_date, artist, ...}}
+        "income_sources": {},   # {contract_title: {sync_rate, expense_types, has_advances}}
         "source_files": [],      # [[type, filename], ...]
         "stmt_files_processed": 0,
     }
@@ -1419,7 +1481,7 @@ def apply_files_to_state(
     if "advance_balances" in files:
         state["advance_balances"] = load_advance_balances(files["advance_balances"])
     if "income_sources" in files:
-        pass  # recognised and accepted; loader to be wired up once output is reviewed
+        state["income_sources"] = load_income_sources(files["income_sources"])
     if "license_registry" in files:
         state["license_registry"] = load_license_registry(files["license_registry"])
 
@@ -1495,6 +1557,7 @@ def render_state_to_xlsx(state: dict) -> bytes:
         orchard_contracts=state.get("orchard_contracts", {}),
         advance_balances=state.get("advance_balances", {}),
         license_registry=state.get("license_registry", {}),
+        income_sources=state.get("income_sources", {}),
     )
 
     stats = {
@@ -1534,6 +1597,7 @@ def state_summary(state: dict) -> dict:
         "has_orchard_contracts": bool(state.get("orchard_contracts")),
         "has_advance_balances": bool(state.get("advance_balances")),
         "has_license_registry": bool(state.get("license_registry")),
+        "has_income_sources": bool(state.get("income_sources")),
         "isrc_count": len(state.get("catalog", {})),
         "contract_count": len(state.get("contract_terms", {})),
         "orchard_artist_count": len(state.get("orchard_contracts", {})),
