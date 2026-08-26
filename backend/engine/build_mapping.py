@@ -1061,8 +1061,27 @@ def _build_data_rows(
                 gross,
             ))
 
-    # Add unmatched catalog ISRCs as single blank rows
+    # Collect all ISRCs already covered by linked contract rows
     linked_isrcs = {str(lk.get("track-isrc", "") or "").strip().upper() for lk in links}
+    catalog_isrcs = {isrc.upper() for isrc in catalog}
+
+    def _blank_isrc_row(isrc, title, upc, album, cat_no, label, p_line, rd, duration,
+                        fmt, artist, dealer_price, contract_end, gross):
+        return (
+            isrc, title, "", upc, album, cat_no, label, p_line, rd, duration, fmt,
+            "", "", "", dealer_price,  # Distribution Channel, Price Category, Catalogue Group, Dealer Price
+            artist,
+            "", "", "", "", "",  # Track Sales Contract Name/%, Costs Contract Name/%
+            "", "", "", "", "", "",  # Contract Name, Payee, Type, Accounting, Currency, Profit Share
+            "", contract_end, "",   # Contract Start, End, Notes
+            "", "", "", "", "", "", "", "",  # Rate columns
+            "", "", "", "", "",  # Esc columns
+            "", "", "", "",  # Balance, Advance, Min Payout, Withholding
+            "", "", "", "",  # Cross contract columns
+            gross,
+        )
+
+    # Unmatched catalog ISRCs (in RS Products/Tracks but no contract link)
     for isrc, track in catalog.items():
         if isrc.upper() in linked_isrcs:
             continue
@@ -1077,27 +1096,40 @@ def _build_data_rows(
             duration = ""
         lr = (license_registry or {}).get(isrc.upper(), {})
         gross = (top_isrcs or {}).get(isrc.upper(), None)
-        rows.append((
+        rows.append(_blank_isrc_row(
             isrc,
             track.get("track-title", ""),
-            "",  # Track Version
             track.get("upc", ""),
             track.get("album-title", ""),
             track.get("catalog-no", ""),
             track.get("label-name", ""),
             track.get("p-line", ""),
-            rd,
-            duration,
+            rd, duration,
             track.get("product-type", ""),
-            "", "", "", track.get("full-price (usd)", ""),  # Distribution Channel, Price Category, Catalogue Group, Dealer Price
             track.get("primary-album-artist", ""),
-            "", "", "", "", "",  # Track Sales Contract Name/%, Costs Contract Name/%
-            "", "", "", "", "", "",  # Contract Name, Payee, Type, Accounting, Currency, Profit Share
-            "", lr.get("expiration_date", ""), "",  # Contract Start, End, Notes
-            "", "", "", "", "", "", "", "",  # Rate columns
-            "", "", "", "", "",  # Esc columns
-            "", "", "", "",  # Balance, Advance, Min Payout, Withholding
-            "", "", "", "",  # Cross contract columns
+            track.get("full-price (usd)", ""),
+            lr.get("expiration_date", ""),
+            gross,
+        ))
+
+    # ISRCs in the license registry but NOT in the RS catalog at all
+    for isrc_upper, lr in (license_registry or {}).items():
+        if isrc_upper in catalog_isrcs or isrc_upper in linked_isrcs:
+            continue
+        gross = (top_isrcs or {}).get(isrc_upper, None)
+        rows.append(_blank_isrc_row(
+            isrc_upper,
+            lr.get("track", ""),
+            lr.get("upc", ""),
+            "",  # album title not in license registry
+            "", "",  # cat no, label
+            "",  # p-line
+            "",  # release date
+            "",  # duration
+            "",  # format
+            lr.get("artist", ""),
+            "",  # dealer price
+            lr.get("expiration_date", ""),
             gross,
         ))
 
