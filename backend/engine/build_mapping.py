@@ -142,6 +142,10 @@ COLUMN_DEFS: list[tuple[str, str, int, bool, str]] = [
      "The specific contract name this one transfers funds to/from."),
     ("financials", "Cross Contract %", 18, True,
      "The percentage of income transferred between cross-collateralized contracts."),
+    # REVENUE
+    ("revenue", "2026E Gross (USD)", 20, False,
+     "Estimated 2026 gross revenue for this ISRC from the Royalty Share top-earners export. "
+     "Used to prioritise which gaps to fill first."),
 ]
 
 # ---------------------------------------------------------------------------
@@ -154,6 +158,7 @@ BANDS: dict[str, dict[str, str]] = {
     "contract":   {"header": "6A9178", "rowA": "E8F2EC", "rowB": "CFE8D8"},
     "rate":       {"header": "B8976A", "rowA": "F7F0E4", "rowB": "EDE0C8"},
     "financials": {"header": "957A8F", "rowA": "F2EBF5", "rowB": "E2D0E8"},
+    "revenue":    {"header": "4A7FA5", "rowA": "E8F4FB", "rowB": "CCE8F5"},
 }
 
 BAND_LABELS = {
@@ -181,6 +186,7 @@ _HEADER_FINGERPRINTS: list[tuple[str, list[str], int]] = [
     ("contract_terms",    ["reserve-rate", "term-start", "rate-type", "contract-title"], 3),
     ("income_sources",    ["source-type", "income-type", "net-revenue-rate", "recoupable-percent"], 3),
     ("license_registry",  ["license period expiration date", "track isrc", "release display upc"], 2),
+    ("top_isrcs",         ["2026e gross", "isrc", "track"],                                        2),
     ("statement_csv",     ["sale date", "net payable", "contract name"],            3),
     ("orchard_contracts", ["royalty split", "remaining terms", "license period"],   2),
     ("statement_xlsx",    ["contract name", "net payable"],                         2),
@@ -680,6 +686,53 @@ def load_income_sources(data: bytes) -> dict:
     return result
 
 
+def load_top_isrcs(data: bytes) -> dict:
+    """
+    Parse the Top Earning ISRCs export.
+    Returns {isrc_upper: gross_usd_float}.
+    Handles XLS and XLSX. Looks for columns named 'ISRC' and '2026E Gross' (case-insensitive).
+    """
+    result: dict = {}
+    try:
+        try:
+            wb = openpyxl.load_workbook(io.BytesIO(data), data_only=True, read_only=True)
+            ws = wb.active
+            rows_iter = ws.iter_rows(values_only=True)
+            raw_headers = next(rows_iter, [])
+            headers = [str(v).lower().strip() if v else "" for v in raw_headers]
+            raw_rows = list(rows_iter)
+            wb.close()
+        except Exception:
+            import xlrd as _xlrd
+            xwb = _xlrd.open_workbook(file_contents=data)
+            xws = xwb.sheet_by_index(0)
+            headers = [str(xws.cell_value(0, c)).lower().strip() for c in range(xws.ncols)]
+            raw_rows = [
+                tuple(xws.cell_value(r, c) for c in range(xws.ncols))
+                for r in range(1, xws.nrows)
+            ]
+
+        isrc_col = next((i for i, h in enumerate(headers) if h == "isrc"), None)
+        gross_col = next((i for i, h in enumerate(headers) if "2026" in h and "gross" in h), None)
+        if isrc_col is None or gross_col is None:
+            return result
+
+        for row in raw_rows:
+            if not row or len(row) <= max(isrc_col, gross_col):
+                continue
+            isrc = str(row[isrc_col] or "").strip().upper()
+            gross = row[gross_col]
+            if not isrc:
+                continue
+            try:
+                result[isrc] = float(gross)
+            except (TypeError, ValueError):
+                result[isrc] = 0.0
+    except Exception:
+        pass
+    return result
+
+
 def load_license_registry(data: bytes) -> dict:
     """
     Parse the 'All Releases Summary Info' style XLSX.
@@ -842,6 +895,7 @@ def _build_data_rows(
     advance_balances: dict | None = None,
     license_registry: dict | None = None,
     income_sources: dict | None = None,
+    top_isrcs: dict | None = None,
 ) -> list[tuple]:
     def latest_net(contract: str, isrc: str):
         key = isrc or "__release__"
@@ -939,6 +993,7 @@ def _build_data_rows(
                 expense_note = "Recoupable: " + ", ".join(iso["expense_types"])
             notes = term.get("comments", "") or oc.get("notes", "") or expense_note
 
+            gross = (top_isrcs or {}).get(isrc.upper(), None)
             rows.append((
                 isrc,
                 track.get("track-title", "") or link.get("track-title", ""),
@@ -990,7 +1045,51 @@ def _build_data_rows(
                 "",  # Cross Contract Process
                 "",  # Cross Contract Link
                 "",  # Cross Contract %
+                gross,
             ))
+
+    # Add unmatched catalog ISRCs as single blank rows
+    linked_isrcs = {str(lk.get("track-isrc", "") or "").strip().upper() for lk in links}
+    for isrc, track in catalog.items():
+        if isrc.upper() in linked_isrcs:
+            continue
+        rd = track.get("release-date", "")
+        if hasattr(rd, "strftime"):
+            rd = rd.strftime("%Y-%m-%d")
+        mins = track.get("track-minutes", "")
+        secs = track.get("track-seconds", "")
+        try:
+            duration = f"{int(mins)}:{int(secs):02d}" if mins != "" else ""
+        except (ValueError, TypeError):
+            duration = ""
+        lr = (license_registry or {}).get(isrc.upper(), {})
+        gross = (top_isrcs or {}).get(isrc.upper(), None)
+        rows.append((
+            isrc,
+            track.get("track-title", ""),
+            "",  # Track Version
+            track.get("upc", ""),
+            track.get("album-title", ""),
+            track.get("catalog-no", ""),
+            track.get("label-name", ""),
+            track.get("p-line", ""),
+            rd,
+            duration,
+            track.get("product-type", ""),
+            "", "", "", track.get("full-price (usd)", ""),  # Distribution Channel, Price Category, Catalogue Group, Dealer Price
+            track.get("primary-album-artist", ""),
+            "", "", "", "", "",  # Track Sales Contract Name/%, Costs Contract Name/%
+            "", "", "", "", "", "",  # Contract Name, Payee, Type, Accounting, Currency, Profit Share
+            "", lr.get("expiration_date", ""), "",  # Contract Start, End, Notes
+            "", "", "", "", "", "", "", "",  # Rate columns
+            "", "", "", "", "",  # Esc columns
+            "", "", "", "",  # Balance, Advance, Min Payout, Withholding
+            "", "", "", "",  # Cross contract columns
+            gross,
+        ))
+
+    # Sort all rows by 2026E Gross descending (gross is the last element)
+    rows.sort(key=lambda r: (r[-1] is None, -(r[-1] or 0)))
     return rows
 
 
@@ -1451,6 +1550,7 @@ def empty_state() -> dict:
         "advance_balances": {},  # {name_lower: {name, balance}}
         "license_registry": {}, # {isrc_upper: {expiration_date, artist, ...}}
         "income_sources": {},   # {contract_title: {sync_rate, expense_types, has_advances}}
+        "top_isrcs": {},        # {isrc_upper: gross_usd_float}
         "source_files": [],      # [[type, filename], ...]
         "stmt_files_processed": 0,
     }
@@ -1484,6 +1584,8 @@ def apply_files_to_state(
         state["income_sources"] = load_income_sources(files["income_sources"])
     if "license_registry" in files:
         state["license_registry"] = load_license_registry(files["license_registry"])
+    if "top_isrcs" in files:
+        state["top_isrcs"] = load_top_isrcs(files["top_isrcs"])
 
     # --- Statement files: accumulate ---
     # Reconstruct mutable defaultdicts from stored plain dicts
@@ -1558,6 +1660,7 @@ def render_state_to_xlsx(state: dict) -> bytes:
         advance_balances=state.get("advance_balances", {}),
         license_registry=state.get("license_registry", {}),
         income_sources=state.get("income_sources", {}),
+        top_isrcs=state.get("top_isrcs", {}),
     )
 
     stats = {
@@ -1598,6 +1701,8 @@ def state_summary(state: dict) -> dict:
         "has_advance_balances": bool(state.get("advance_balances")),
         "has_license_registry": bool(state.get("license_registry")),
         "has_income_sources": bool(state.get("income_sources")),
+        "has_top_isrcs": bool(state.get("top_isrcs")),
+        "top_isrc_count": len(state.get("top_isrcs", {})),
         "isrc_count": len(state.get("catalog", {})),
         "contract_count": len(state.get("contract_terms", {})),
         "orchard_artist_count": len(state.get("orchard_contracts", {})),
