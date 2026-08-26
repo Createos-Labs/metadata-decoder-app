@@ -179,6 +179,7 @@ _HEADER_FINGERPRINTS: list[tuple[str, list[str], int]] = [
     ("catalog",           ["p-line", "isrc", "upc", "track-title", "album-title"], 3),
     ("isrc_links",        ["track-isrc", "proration", "cross-collateralize"],       2),
     ("contract_terms",    ["reserve-rate", "term-start", "rate-type", "contract-title"], 3),
+    ("income_sources",    ["source-type", "income-type", "net-revenue-rate", "recoupable-percent"], 3),
     ("statement_csv",     ["sale date", "net payable", "contract name"],            3),
     ("orchard_contracts", ["royalty split", "remaining terms", "license period"],   2),
     ("statement_xlsx",    ["contract name", "net payable"],                         2),
@@ -1363,6 +1364,8 @@ def apply_files_to_state(
         state["orchard_contracts"] = load_orchard_contracts(files["orchard_contracts"])
     if "advance_balances" in files:
         state["advance_balances"] = load_advance_balances(files["advance_balances"])
+    if "income_sources" in files:
+        pass  # recognised and accepted; loader to be wired up once output is reviewed
 
     # --- Statement files: accumulate ---
     # Reconstruct mutable defaultdicts from stored plain dicts
