@@ -167,6 +167,7 @@ BAND_LABELS = {
     "contract": "CONTRACT",
     "rate": "RATE",
     "financials": "FINANCIALS",
+    "revenue": "REVENUE",
 }
 
 PCT_FORMAT = '0.00"%"'
