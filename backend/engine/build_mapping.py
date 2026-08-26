@@ -741,8 +741,10 @@ def load_top_isrcs(data: bytes) -> dict:
                 result[isrc] = float(gross)
             except (TypeError, ValueError):
                 result[isrc] = 0.0
-    except Exception:
-        pass
+    except Exception as _e:
+        import traceback as _tb
+        _tb.print_exc()
+        raise RuntimeError(f"load_top_isrcs failed: {_e}") from _e
     return result
 
 

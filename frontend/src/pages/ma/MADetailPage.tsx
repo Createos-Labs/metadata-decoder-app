@@ -212,6 +212,26 @@ function MappingStage({ acqId, acqName }: { acqId: string; acqName: string }) {
                 ✓ Advance Balances
               </span>
             )}
+            {status.has_license_registry && (
+              <span className="rounded-full bg-emerald-100 px-2.5 py-1 font-medium text-emerald-700">
+                ✓ License Registry ({status.license_registry_count.toLocaleString()} ISRCs)
+              </span>
+            )}
+            {status.has_income_sources && (
+              <span className="rounded-full bg-emerald-100 px-2.5 py-1 font-medium text-emerald-700">
+                ✓ Income Sources
+              </span>
+            )}
+            {status.has_top_isrcs && (
+              <span className="rounded-full bg-emerald-100 px-2.5 py-1 font-medium text-emerald-700">
+                ✓ Top ISRCs ({status.top_isrc_count.toLocaleString()} loaded)
+              </span>
+            )}
+            {!status.has_top_isrcs && (
+              <span className="rounded-full bg-slate-200 px-2.5 py-1 font-medium text-slate-500">
+                No revenue data yet
+              </span>
+            )}
             {status.stmt_files_processed > 0 && (
               <span className="rounded-full bg-emerald-100 px-2.5 py-1 font-medium text-emerald-700">
                 ✓ {status.stmt_files_processed} statement file{status.stmt_files_processed !== 1 ? "s" : ""}
