@@ -713,6 +713,18 @@ def load_top_isrcs(data: bytes) -> dict:
                 for r in range(1, xws.nrows)
             ]
 
+        # Find the actual header row — skip blank leading rows
+        header_idx = None
+        for idx, row in enumerate(raw_rows):
+            cleaned = [str(v).lower().strip() if v else "" for v in row]
+            if "isrc" in cleaned:
+                headers = cleaned
+                header_idx = idx
+                break
+        if header_idx is None:
+            return result
+        raw_rows = raw_rows[header_idx + 1:]
+
         isrc_col = next((i for i, h in enumerate(headers) if h == "isrc"), None)
         gross_col = next((i for i, h in enumerate(headers) if "2026" in h and "gross" in h), None)
         if isrc_col is None or gross_col is None:
