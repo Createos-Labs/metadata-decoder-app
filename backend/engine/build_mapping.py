@@ -180,6 +180,7 @@ _HEADER_FINGERPRINTS: list[tuple[str, list[str], int]] = [
     ("isrc_links",        ["track-isrc", "proration", "cross-collateralize"],       2),
     ("contract_terms",    ["reserve-rate", "term-start", "rate-type", "contract-title"], 3),
     ("income_sources",    ["source-type", "income-type", "net-revenue-rate", "recoupable-percent"], 3),
+    ("license_registry",  ["license period expiration date", "track isrc", "release display upc"], 2),
     ("statement_csv",     ["sale date", "net payable", "contract name"],            3),
     ("orchard_contracts", ["royalty split", "remaining terms", "license period"],   2),
     ("statement_xlsx",    ["contract name", "net payable"],                         2),
@@ -627,6 +628,52 @@ def load_advance_balances(data: bytes) -> dict:
     return result
 
 
+def load_license_registry(data: bytes) -> dict:
+    """
+    Parse the 'All Releases Summary Info' style XLSX.
+    Returns {isrc_upper: {expiration_date, artist, track, upc, contract_url}}.
+    Looks for a sheet containing 'Track ISRC' and 'License Period Expiration Date' headers.
+    """
+    result: dict = {}
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(data), data_only=True, read_only=True)
+        target_ws = None
+        for name in wb.sheetnames:
+            ws = wb[name]
+            for row in ws.iter_rows(min_row=1, max_row=5, values_only=True):
+                headers = [str(v).lower().strip() if v else "" for v in row]
+                if "track isrc" in headers and "license period expiration date" in headers:
+                    target_ws = ws
+                    target_headers = headers
+                    break
+            if target_ws:
+                break
+        if not target_ws:
+            wb.close()
+            return result
+        for row in target_ws.iter_rows(min_row=2, values_only=True):
+            r = dict(zip(target_headers, row))
+            isrc = str(r.get("track isrc", "") or "").strip().upper()
+            if not isrc or isrc == "TRACK ISRC":
+                continue
+            exp = r.get("license period expiration date", "")
+            if hasattr(exp, "strftime"):
+                exp = exp.strftime("%Y-%m-%d")
+            elif exp:
+                exp = str(exp).strip()
+            result[isrc] = {
+                "expiration_date": exp or "",
+                "artist": str(r.get("track primary artist(s)", "") or "").strip(),
+                "track": str(r.get("track track name", "") or "").strip(),
+                "upc": str(r.get("release display upc", "") or "").strip(),
+                "contract_url": str(r.get("contract", "") or "").strip(),
+            }
+        wb.close()
+    except Exception:
+        pass
+    return result
+
+
 def _period_rank(p: str) -> int:
     return {"1h23": 1, "2h23": 2, "1h24": 3, "2h24": 4, "1h25": 5}.get(
         str(p).lower().strip(), 0
@@ -741,6 +788,7 @@ def _build_data_rows(
     best_balance: dict,
     orchard_contracts: dict | None = None,
     advance_balances: dict | None = None,
+    license_registry: dict | None = None,
 ) -> list[tuple]:
     def latest_net(contract: str, isrc: str):
         key = isrc or "__release__"
@@ -817,9 +865,14 @@ def _build_data_rows(
                 if ab:
                     advance_str = str(ab.get("balance", ""))
 
-            # Prefer terms-export dates; fall back to orchard contract dates
+            # License registry lookup by ISRC
+            lr: dict = {}
+            if license_registry:
+                lr = license_registry.get(isrc.upper(), {})
+
+            # Prefer terms-export dates; fall back to orchard contract dates; then license registry
             contract_start = td or oc.get("contract_date", "")
-            contract_end = te or oc.get("expiration_date", "")
+            contract_end = te or oc.get("expiration_date", "") or lr.get("expiration_date", "")
             territory = term.get("region", "") or oc.get("territory", "")
             contract_type = term.get("rate-type", "") or oc.get("type", "")
             profit_share = oc.get("profit_share_pct", "") if oc else ""
@@ -1335,6 +1388,7 @@ def empty_state() -> dict:
         "best_balance": {},      # {contract_lower: {balance, period, artist}}
         "orchard_contracts": {}, # {artist_lower: {type, contract_date, ...}}
         "advance_balances": {},  # {name_lower: {name, balance}}
+        "license_registry": {}, # {isrc_upper: {expiration_date, artist, ...}}
         "source_files": [],      # [[type, filename], ...]
         "stmt_files_processed": 0,
     }
@@ -1366,6 +1420,8 @@ def apply_files_to_state(
         state["advance_balances"] = load_advance_balances(files["advance_balances"])
     if "income_sources" in files:
         pass  # recognised and accepted; loader to be wired up once output is reviewed
+    if "license_registry" in files:
+        state["license_registry"] = load_license_registry(files["license_registry"])
 
     # --- Statement files: accumulate ---
     # Reconstruct mutable defaultdicts from stored plain dicts
@@ -1438,6 +1494,7 @@ def render_state_to_xlsx(state: dict) -> bytes:
         state.get("best_balance", {}),
         orchard_contracts=state.get("orchard_contracts", {}),
         advance_balances=state.get("advance_balances", {}),
+        license_registry=state.get("license_registry", {}),
     )
 
     stats = {
@@ -1476,9 +1533,11 @@ def state_summary(state: dict) -> dict:
         "has_contract_terms": bool(state.get("contract_terms")),
         "has_orchard_contracts": bool(state.get("orchard_contracts")),
         "has_advance_balances": bool(state.get("advance_balances")),
+        "has_license_registry": bool(state.get("license_registry")),
         "isrc_count": len(state.get("catalog", {})),
         "contract_count": len(state.get("contract_terms", {})),
         "orchard_artist_count": len(state.get("orchard_contracts", {})),
+        "license_registry_count": len(state.get("license_registry", {})),
         "stmt_files_processed": state.get("stmt_files_processed", 0),
         "contracts_with_balance": len(net_by) + len(state.get("best_balance", {})),
         "source_files": state.get("source_files", []),

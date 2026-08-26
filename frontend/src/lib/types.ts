@@ -88,6 +88,8 @@ export interface MAMappingStatus {
   has_contract_terms: boolean;
   has_orchard_contracts: boolean;
   has_advance_balances: boolean;
+  has_license_registry: boolean;
+  license_registry_count: number;
   isrc_count: number;
   contract_count: number;
   orchard_artist_count: number;
