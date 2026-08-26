@@ -1073,7 +1073,7 @@ def _build_data_rows(
             isrc, title, "", upc, album, cat_no, label, p_line, rd, duration, fmt,
             "", "", "", dealer_price,  # Distribution Channel, Price Category, Catalogue Group, Dealer Price
             artist,
-            "", "", "", "", "",  # Track Sales Contract Name/%, Costs Contract Name/%
+            "", "", "", "",  # Track Sales Contract Name/%, Costs Contract Name/%
             "", "", "", "", "", "",  # Contract Name, Payee, Type, Accounting, Currency, Profit Share
             "", contract_end, "",   # Contract Start, End, Notes
             "", "", "", "", "", "", "", "",  # Rate columns
