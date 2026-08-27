@@ -80,17 +80,13 @@ class FormatCorrections(BaseModel):
 
 
 @router.get("/me")
-async def me(
-    user: User = Depends(require_user),
-    settings: Settings = Depends(get_settings),
-) -> dict:
-    from ..auth import _has_ma_access, _is_admin
+async def me(user: User = Depends(require_user)) -> dict:
     return {
         "email": user.get("email"),
         "name": user.get("name"),
         "picture": user.get("picture"),
-        "maAccess": _has_ma_access(user.email, settings),
-        "isAdmin": _is_admin(user.email, settings),
+        "maAccess": user.has_ma_access,
+        "isAdmin": user.is_admin,
     }
 
 

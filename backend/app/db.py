@@ -2,53 +2,31 @@
 Metadata + decision persistence — PostgREST (PostgreSQL).
 
 Tables: scans, leave_artist, leave_isrc, ma_acquisitions, ma_scans, ma_access
+
+The PostgREST token is obtained per-request by auth.py (via the Management UI
+token exchange endpoint) and stored in a ContextVar. No JWT_SECRET needed here.
 """
 from __future__ import annotations
-
-import base64
-import hashlib
-import hmac
-import json
-import time
 
 import requests
 
 from .config import get_settings
-
-POSTGREST_URL = None  # resolved lazily from settings
 
 
 def _get_url() -> str:
     return get_settings().postgrest_url.rstrip("/")
 
 
-def _mint_service_token() -> str:
-    """Mint a short-lived HS256 JWT for PostgREST service calls."""
-    secret = get_settings().jwt_secret
-    if not secret:
-        raise RuntimeError("JWT_SECRET is not configured — cannot call PostgREST.")
-    header = base64.urlsafe_b64encode(
-        json.dumps({"alg": "HS256", "typ": "JWT"}).encode()
-    ).rstrip(b"=").decode()
-    now = int(time.time())
-    payload = base64.urlsafe_b64encode(
-        json.dumps({
-            "role": "authenticated",
-            "project_roles": {"metadata_decoder": ["admin"]},
-            "iat": now,
-            "exp": now + 300,
-        }).encode()
-    ).rstrip(b"=").decode()
-    sig_input = f"{header}.{payload}".encode()
-    sig = base64.urlsafe_b64encode(
-        hmac.new(secret.encode(), sig_input, hashlib.sha256).digest()
-    ).rstrip(b"=").decode()
-    return f"{header}.{payload}.{sig}"
-
-
 def _headers() -> dict:
+    from .auth import get_postgrest_token
+
+    token = get_postgrest_token()
+    if not token:
+        raise RuntimeError(
+            "No PostgREST token in context — was require_user called for this request?"
+        )
     return {
-        "Authorization": f"Bearer {_mint_service_token()}",
+        "Authorization": f"Bearer {token}",
         "Content-Type": "application/json",
         "Prefer": "return=representation",
     }

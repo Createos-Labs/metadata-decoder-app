@@ -20,7 +20,6 @@ class Settings:
         self.gcs_bucket: str = os.environ.get("GCS_BUCKET", "").strip()
 
         self.firebase_project_id: str = os.environ.get("FIREBASE_PROJECT_ID", "lab-create-os").strip()
-        self.jwt_secret: str = os.environ.get("JWT_SECRET", "").strip()
         self.postgrest_url: str = os.environ.get(
             "POSTGREST_URL",
             "https://postgrest-metadata-decoder-595303106724.us-central1.run.app",
@@ -42,7 +41,9 @@ class Settings:
 
         self.max_upload_bytes: int = int(os.environ.get("MAX_UPLOAD_BYTES", str(25 * 1024 * 1024)))
 
-        self.ma_admin_email: str = os.environ.get("MA_ADMIN_EMAIL", "").strip().lower()
+        # Local dev only: a pre-minted PostgREST token from the Management UI Developer tab
+        # so db calls work without going through the Firebase token exchange flow.
+        self.dev_postgrest_token: str = os.environ.get("DEV_POSTGREST_TOKEN", "").strip()
 
 
 @lru_cache
