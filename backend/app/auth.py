@@ -1,13 +1,11 @@
 """
-Authentication: verify Google Identity ID tokens and enforce the allowed
-email domain.
+Authentication: verify Firebase ID tokens and enforce the allowed email domain.
 
-The frontend signs the user in with Google Identity Services and sends the
-resulting ID token as `Authorization: Bearer <token>` on every API call. Here
-we verify the token's signature/audience against our OAuth client ID and check
-that the email belongs to the allowed company domain (or the explicit
-allowlist). When AUTH_ENABLED is false (local dev) everything is waved through
-as a synthetic local user.
+The frontend signs in with Google via Firebase Auth and sends the resulting
+Firebase ID token as `Authorization: Bearer <token>` on every API call. Here
+we verify the token with Firebase Admin SDK and check that the email belongs
+to the allowed company domain. When AUTH_ENABLED is false (local dev) everything
+is waved through as a synthetic local user.
 """
 from __future__ import annotations
 
@@ -25,20 +23,25 @@ class User(dict):
 
 
 @lru_cache
-def _google_request():
-    import google.auth.transport.requests as gar
+def _firebase_app():
+    import firebase_admin
+    from firebase_admin import credentials
 
-    return gar.Request()
+    s = get_settings()
+    if not firebase_admin._apps:
+        firebase_admin.initialize_app(credentials.ApplicationDefault(), {
+            "projectId": s.firebase_project_id,
+        })
+    return firebase_admin.get_app()
 
 
-def _verify_google_token(token: str, settings: Settings) -> User:
-    from google.oauth2 import id_token as google_id_token
+def _verify_firebase_token(token: str, settings: Settings) -> User:
+    from firebase_admin import auth as fb_auth
 
+    _firebase_app()  # ensure initialized
     try:
-        claims = google_id_token.verify_oauth2_token(
-            token, _google_request(), settings.oauth_client_id or None
-        )
-    except Exception as exc:  # invalid signature, expired, wrong audience, etc.
+        claims = fb_auth.verify_id_token(token)
+    except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=f"Invalid sign-in token: {exc}",
@@ -51,7 +54,7 @@ def _verify_google_token(token: str, settings: Settings) -> User:
             detail="Token has no verified email.",
         )
 
-    domain = (claims.get("hd") or email.split("@")[-1]).lower()
+    domain = email.split("@")[-1].lower()
     allowed = (
         email in settings.allowed_emails
         or (settings.allowed_email_domain and domain == settings.allowed_email_domain)
@@ -59,9 +62,7 @@ def _verify_google_token(token: str, settings: Settings) -> User:
     if not allowed:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail=(
-                f"Access is restricted to @{settings.allowed_email_domain} accounts."
-            ),
+            detail=f"Access is restricted to @{settings.allowed_email_domain} accounts.",
         )
 
     return User(
@@ -86,7 +87,7 @@ async def require_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
     token = authorization.split(" ", 1)[1].strip()
-    return _verify_google_token(token, settings)
+    return _verify_firebase_token(token, settings)
 
 
 def _is_admin(email: str, settings: Settings) -> bool:

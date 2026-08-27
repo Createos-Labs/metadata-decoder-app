@@ -29,7 +29,7 @@ async def public_config() -> dict:
     whether auth is on)."""
     return {
         "authEnabled": settings.auth_enabled,
-        "oauthClientId": settings.oauth_client_id,
+        "oauthClientId": "",  # kept for API compatibility; auth is now Firebase
         "allowedDomain": settings.allowed_email_domain,
     }
 
@@ -37,6 +37,11 @@ async def public_config() -> dict:
 @app.get("/api/healthz")
 async def healthz() -> dict:
     return {"status": "ok"}
+
+
+@app.get("/health")
+async def health() -> dict:
+    return {"status": "ok", "project": "metadata-decoder"}
 
 
 # ---- Static SPA (production) ----------------------------------------------

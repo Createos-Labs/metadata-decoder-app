@@ -1,137 +1,177 @@
 """
-Metadata + decision persistence — Firestore only.
+Metadata + decision persistence — PostgREST (PostgreSQL).
 
-Collections:
-  - scans:        one document per uploaded sheet (metadata + issue counts +
-                  storage keys). The big results payload lives in GCS as
-                  results.json; only a pointer is kept here.
-  - leave_artist: artist clusters marked "LEAVE" (intentionally similar names).
-  - leave_isrc:   ISRC conflicts confirmed OK (intentional duplicates).
+Tables: scans, leave_artist, leave_isrc, ma_acquisitions, ma_scans, ma_access
 """
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
+import json
+import time
+
+import requests
+
 from .config import get_settings
 
-SCANS = "scans"
-LEAVE_ARTIST = "leave_artist"
-LEAVE_ISRC = "leave_isrc"
-MA_ACQUISITIONS = "ma_acquisitions"
-MA_SCANS = "ma_scans"
-MA_ACCESS = "ma_access"
+POSTGREST_URL = None  # resolved lazily from settings
+
+
+def _get_url() -> str:
+    return get_settings().postgrest_url.rstrip("/")
+
+
+def _mint_service_token() -> str:
+    """Mint a short-lived HS256 JWT for PostgREST service calls."""
+    secret = get_settings().jwt_secret
+    if not secret:
+        raise RuntimeError("JWT_SECRET is not configured — cannot call PostgREST.")
+    header = base64.urlsafe_b64encode(
+        json.dumps({"alg": "HS256", "typ": "JWT"}).encode()
+    ).rstrip(b"=").decode()
+    now = int(time.time())
+    payload = base64.urlsafe_b64encode(
+        json.dumps({
+            "role": "authenticated",
+            "project_roles": {"metadata_decoder": ["admin"]},
+            "iat": now,
+            "exp": now + 300,
+        }).encode()
+    ).rstrip(b"=").decode()
+    sig_input = f"{header}.{payload}".encode()
+    sig = base64.urlsafe_b64encode(
+        hmac.new(secret.encode(), sig_input, hashlib.sha256).digest()
+    ).rstrip(b"=").decode()
+    return f"{header}.{payload}.{sig}"
+
+
+def _headers() -> dict:
+    return {
+        "Authorization": f"Bearer {_mint_service_token()}",
+        "Content-Type": "application/json",
+        "Prefer": "return=representation",
+    }
+
+
+def _get(path: str, params: dict | None = None) -> list[dict]:
+    r = requests.get(f"{_get_url()}/{path}", headers=_headers(), params=params, timeout=15)
+    r.raise_for_status()
+    return r.json()
+
+
+def _post(path: str, data: dict) -> dict:
+    r = requests.post(f"{_get_url()}/{path}", headers=_headers(), json=data, timeout=15)
+    r.raise_for_status()
+    rows = r.json()
+    return rows[0] if isinstance(rows, list) and rows else data
+
+
+def _patch(path: str, params: dict, data: dict) -> None:
+    h = {**_headers(), "Prefer": ""}
+    r = requests.patch(f"{_get_url()}/{path}", headers=h, params=params, json=data, timeout=15)
+    r.raise_for_status()
+
+
+def _delete(path: str, params: dict) -> None:
+    h = {**_headers(), "Prefer": ""}
+    r = requests.delete(f"{_get_url()}/{path}", headers=h, params=params, timeout=15)
+    r.raise_for_status()
 
 
 class Database:
-    def __init__(self, project: str, database: str) -> None:
-        from google.cloud import firestore
-
-        self._fs = firestore.Client(project=project, database=database)
+    # ---- Scans ---------------------------------------------------------------
 
     def create_scan(self, scan: dict) -> None:
-        self._fs.collection(SCANS).document(scan["id"]).set(scan)
+        _post("scans", scan)
 
     def get_scan(self, scan_id: str) -> dict | None:
-        doc = self._fs.collection(SCANS).document(scan_id).get()
-        return doc.to_dict() if doc.exists else None
+        rows = _get("scans", {"id": f"eq.{scan_id}"})
+        return rows[0] if rows else None
 
     def list_scans(self) -> list[dict]:
-        docs = (
-            self._fs.collection(SCANS)
-            .order_by("created_at", direction="DESCENDING")
-            .stream()
-        )
-        return [d.to_dict() for d in docs]
+        return _get("scans", {"order": "created_at.desc"})
 
     def update_scan(self, scan_id: str, fields: dict) -> None:
-        self._fs.collection(SCANS).document(scan_id).update(fields)
+        _patch("scans", {"id": f"eq.{scan_id}"}, fields)
 
     def delete_scan(self, scan_id: str) -> bool:
-        ref = self._fs.collection(SCANS).document(scan_id)
-        if not ref.get().exists:
+        if not self.get_scan(scan_id):
             return False
-        ref.delete()
+        _delete("scans", {"id": f"eq.{scan_id}"})
         return True
+
+    # ---- LEAVE ---------------------------------------------------------------
 
     def list_leave(self, kind: str) -> list[dict]:
-        return [d.to_dict() for d in self._fs.collection(kind).stream()]
+        rows = _get(kind)
+        return [r["data"] for r in rows]
 
     def add_leave(self, kind: str, records: list[dict]) -> int:
-        col = self._fs.collection(kind)
         for rec in records:
-            col.add(rec)
+            _post(kind, {"data": rec})
         return len(records)
 
-    # ---- M&A Acquisitions --------------------------------------------------
+    # ---- M&A Acquisitions ----------------------------------------------------
 
     def create_acquisition(self, acq: dict) -> None:
-        self._fs.collection(MA_ACQUISITIONS).document(acq["id"]).set(acq)
+        _post("ma_acquisitions", acq)
 
     def get_acquisition(self, acq_id: str) -> dict | None:
-        doc = self._fs.collection(MA_ACQUISITIONS).document(acq_id).get()
-        return doc.to_dict() if doc.exists else None
+        rows = _get("ma_acquisitions", {"id": f"eq.{acq_id}"})
+        return rows[0] if rows else None
 
     def list_acquisitions(self) -> list[dict]:
-        docs = (
-            self._fs.collection(MA_ACQUISITIONS)
-            .order_by("created_at", direction="DESCENDING")
-            .stream()
-        )
-        return [d.to_dict() for d in docs]
+        return _get("ma_acquisitions", {"order": "created_at.desc"})
 
     def update_acquisition(self, acq_id: str, fields: dict) -> None:
-        self._fs.collection(MA_ACQUISITIONS).document(acq_id).update(fields)
+        _patch("ma_acquisitions", {"id": f"eq.{acq_id}"}, fields)
 
     def delete_acquisition(self, acq_id: str) -> bool:
-        ref = self._fs.collection(MA_ACQUISITIONS).document(acq_id)
-        if not ref.get().exists:
+        if not self.get_acquisition(acq_id):
             return False
-        ref.delete()
+        _delete("ma_acquisitions", {"id": f"eq.{acq_id}"})
         return True
 
-    # ---- M&A Scans ---------------------------------------------------------
+    # ---- M&A Scans -----------------------------------------------------------
 
     def create_ma_scan(self, scan: dict) -> None:
-        self._fs.collection(MA_SCANS).document(scan["id"]).set(scan)
+        _post("ma_scans", scan)
 
     def get_ma_scan(self, scan_id: str) -> dict | None:
-        doc = self._fs.collection(MA_SCANS).document(scan_id).get()
-        return doc.to_dict() if doc.exists else None
+        rows = _get("ma_scans", {"id": f"eq.{scan_id}"})
+        return rows[0] if rows else None
 
     def list_ma_scans_for_acquisition(self, acq_id: str) -> list[dict]:
-        docs = (
-            self._fs.collection(MA_SCANS)
-            .where("acquisition_id", "==", acq_id)
-            .stream()
-        )
-        results = [d.to_dict() for d in docs]
-        results.sort(key=lambda d: d.get("created_at", ""))
-        return results
+        rows = _get("ma_scans", {"acquisition_id": f"eq.{acq_id}", "order": "created_at.asc"})
+        return rows
 
     def update_ma_scan(self, scan_id: str, fields: dict) -> None:
-        self._fs.collection(MA_SCANS).document(scan_id).update(fields)
+        _patch("ma_scans", {"id": f"eq.{scan_id}"}, fields)
 
     def delete_ma_scan(self, scan_id: str) -> bool:
-        ref = self._fs.collection(MA_SCANS).document(scan_id)
-        if not ref.get().exists:
+        if not self.get_ma_scan(scan_id):
             return False
-        ref.delete()
+        _delete("ma_scans", {"id": f"eq.{scan_id}"})
         return True
 
-    # ---- M&A access control ------------------------------------------------
+    # ---- M&A access control --------------------------------------------------
 
     def has_ma_access(self, email: str) -> bool:
-        return self._fs.collection(MA_ACCESS).document(email.lower()).get().exists
+        rows = _get("ma_access", {"email": f"eq.{email.lower()}"})
+        return bool(rows)
 
     def list_ma_access(self) -> list[str]:
-        return [d.id for d in self._fs.collection(MA_ACCESS).stream()]
+        rows = _get("ma_access")
+        return [r["email"] for r in rows]
 
     def grant_ma_access(self, email: str) -> None:
-        self._fs.collection(MA_ACCESS).document(email.lower()).set({"email": email.lower()})
+        _post("ma_access", {"email": email.lower()})
 
     def revoke_ma_access(self, email: str) -> bool:
-        ref = self._fs.collection(MA_ACCESS).document(email.lower())
-        if not ref.get().exists:
+        if not self.has_ma_access(email):
             return False
-        ref.delete()
+        _delete("ma_access", {"email": f"eq.{email.lower()}"})
         return True
 
 
@@ -141,6 +181,5 @@ _db: Database | None = None
 def get_db() -> Database:
     global _db
     if _db is None:
-        s = get_settings()
-        _db = Database(s.gcp_project, s.firestore_database)
+        _db = Database()
     return _db

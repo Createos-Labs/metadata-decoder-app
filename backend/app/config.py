@@ -18,10 +18,15 @@ class Settings:
     def __init__(self) -> None:
         self.gcp_project: str = os.environ.get("GOOGLE_CLOUD_PROJECT", "").strip()
         self.gcs_bucket: str = os.environ.get("GCS_BUCKET", "").strip()
-        self.firestore_database: str = os.environ.get("FIRESTORE_DATABASE", "(default)").strip()
+
+        self.firebase_project_id: str = os.environ.get("FIREBASE_PROJECT_ID", "lab-create-os").strip()
+        self.jwt_secret: str = os.environ.get("JWT_SECRET", "").strip()
+        self.postgrest_url: str = os.environ.get(
+            "POSTGREST_URL",
+            "https://postgrest-metadata-decoder-595303106724.us-central1.run.app",
+        ).strip()
 
         self.auth_enabled: bool = _bool("AUTH_ENABLED", default=True)
-        self.oauth_client_id: str = os.environ.get("OAUTH_CLIENT_ID", "").strip()
         self.allowed_email_domain: str = os.environ.get(
             "ALLOWED_EMAIL_DOMAIN", "createmusicgroup.com"
         ).strip().lower()

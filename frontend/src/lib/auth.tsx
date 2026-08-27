@@ -3,85 +3,68 @@ import {
   useCallback,
   useContext,
   useEffect,
-  useRef,
   useState,
   type ReactNode,
 } from "react";
+import { initializeApp, getApps } from "firebase/app";
+import {
+  getAuth,
+  signInWithPopup,
+  signOut as fbSignOut,
+  GoogleAuthProvider,
+  onIdTokenChanged,
+  type User as FBUser,
+} from "firebase/auth";
 import { api, setAuthToken } from "./api";
 import type { AppConfig, AppUser } from "./types";
 
-interface GoogleCredentialResponse {
-  credential: string;
-}
-declare global {
-  interface Window {
-    google?: {
-      accounts: {
-        id: {
-          initialize: (cfg: {
-            client_id: string;
-            callback: (r: GoogleCredentialResponse) => void;
-            auto_select?: boolean;
-          }) => void;
-          renderButton: (el: HTMLElement, opts: Record<string, unknown>) => void;
-          disableAutoSelect: () => void;
-        };
-      };
-    };
-  }
-}
+const firebaseApp =
+  getApps().length > 0
+    ? getApps()[0]
+    : initializeApp({
+        apiKey: "AIzaSyDWI18_-uh9byfX8DeUJFDf6TAxjHzMrRw",
+        authDomain: "lab-create-os.firebaseapp.com",
+        projectId: "lab-create-os",
+      });
 
-const TOKEN_KEY = "decoder_id_token";
+const firebaseAuth = getAuth(firebaseApp);
+const googleProvider = new GoogleAuthProvider();
 
 interface AuthState {
   ready: boolean;
   config: AppConfig | null;
   user: AppUser | null;
   authError: string | null;
+  signIn: () => Promise<void>;
   signOut: () => void;
-  renderButton: (el: HTMLElement) => void;
 }
 
 const AuthContext = createContext<AuthState | null>(null);
-
-function waitForGoogle(timeoutMs = 5000): Promise<Window["google"] | null> {
-  return new Promise((resolve) => {
-    const start = Date.now();
-    const tick = () => {
-      if (window.google) return resolve(window.google);
-      if (Date.now() - start > timeoutMs) return resolve(null);
-      setTimeout(tick, 100);
-    };
-    tick();
-  });
-}
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [ready, setReady] = useState(false);
   const [config, setConfig] = useState<AppConfig | null>(null);
   const [user, setUser] = useState<AppUser | null>(null);
   const [authError, setAuthError] = useState<string | null>(null);
-  const initialized = useRef(false);
 
-  const handleCredential = useCallback(async (resp: GoogleCredentialResponse) => {
-    setAuthToken(resp.credential);
-    localStorage.setItem(TOKEN_KEY, resp.credential);
+  const hydrateUser = useCallback(async (fbUser: FBUser) => {
     try {
+      const token = await fbUser.getIdToken();
+      setAuthToken(token);
       const me = await api.getMe();
       setAuthError(null);
       setUser(me);
     } catch (e) {
-      // The token was valid but the backend rejected this account (e.g. wrong
-      // domain). Surface the reason instead of silently bouncing to sign-in.
       setAuthToken(null);
-      localStorage.removeItem(TOKEN_KEY);
       setUser(null);
       setAuthError(e instanceof Error ? e.message : "Sign-in failed.");
-      window.google?.accounts.id.disableAutoSelect();
+      await fbSignOut(firebaseAuth);
     }
   }, []);
 
   useEffect(() => {
+    let unsubscribe: (() => void) | undefined;
+
     (async () => {
       const cfg = await api.getConfig();
       setConfig(cfg);
@@ -90,58 +73,44 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         try {
           setUser(await api.getMe());
         } catch {
-          /* local mode still returns a synthetic user */
+          /* local mode returns a synthetic user */
         }
         setReady(true);
         return;
       }
 
-      // Restore a stored token if it's still valid.
-      const stored = localStorage.getItem(TOKEN_KEY);
-      if (stored) {
-        setAuthToken(stored);
-        try {
-          setUser(await api.getMe());
-        } catch {
+      unsubscribe = onIdTokenChanged(firebaseAuth, async (fbUser) => {
+        if (fbUser) {
+          await hydrateUser(fbUser);
+        } else {
           setAuthToken(null);
-          localStorage.removeItem(TOKEN_KEY);
+          setUser(null);
         }
-      }
-
-      const google = await waitForGoogle();
-      if (google && cfg.oauthClientId && !initialized.current) {
-        google.accounts.id.initialize({
-          client_id: cfg.oauthClientId,
-          callback: handleCredential,
-          auto_select: true,
-        });
-        initialized.current = true;
-      }
-      setReady(true);
+        setReady(true);
+      });
     })();
-  }, [handleCredential]);
+
+    return () => unsubscribe?.();
+  }, [hydrateUser]);
+
+  const signIn = useCallback(async () => {
+    setAuthError(null);
+    try {
+      await signInWithPopup(firebaseAuth, googleProvider);
+    } catch (e) {
+      setAuthError(e instanceof Error ? e.message : "Sign-in failed.");
+    }
+  }, []);
 
   const signOut = useCallback(() => {
     setUser(null);
     setAuthError(null);
     setAuthToken(null);
-    localStorage.removeItem(TOKEN_KEY);
-    window.google?.accounts.id.disableAutoSelect();
+    fbSignOut(firebaseAuth);
   }, []);
 
-  const renderButton = useCallback((el: HTMLElement) => {
-    if (window.google && config?.oauthClientId) {
-      window.google.accounts.id.renderButton(el, {
-        theme: "outline",
-        size: "large",
-        text: "signin_with",
-        shape: "pill",
-      });
-    }
-  }, [config]);
-
   return (
-    <AuthContext.Provider value={{ ready, config, user, authError, signOut, renderButton }}>
+    <AuthContext.Provider value={{ ready, config, user, authError, signIn, signOut }}>
       {children}
     </AuthContext.Provider>
   );

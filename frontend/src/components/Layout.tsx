@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ReactNode } from "react";
+import { type ReactNode } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { useAuth } from "../lib/auth";
 import { Button, Card, Spinner } from "./ui";
@@ -18,12 +18,7 @@ function Brand() {
 }
 
 function SignInScreen() {
-  const { renderButton, config, authError } = useAuth();
-  const ref = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (ref.current) renderButton(ref.current);
-  }, [renderButton]);
+  const { signIn, config, authError } = useAuth();
 
   return (
     <div className="grid min-h-screen place-items-center px-4">
@@ -42,7 +37,9 @@ function SignInScreen() {
             {authError}
           </div>
         )}
-        <div className="mt-6 flex justify-center" ref={ref} />
+        <div className="mt-6 flex justify-center">
+          <Button onClick={signIn}>Sign in with Google</Button>
+        </div>
       </Card>
     </div>
   );

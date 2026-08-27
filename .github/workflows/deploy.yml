@@ -15,7 +15,7 @@ env:
   PROJECT_ID: lab-create-os
   REGION: us-central1
   SERVICE: metadata-decoder
-  REPOSITORY: decoder # Artifact Registry repo (created by scripts/setup-github-deploy.sh)
+  REPOSITORY: create-os-backend
   RUNTIME_SA: metadata-decoder-run@lab-create-os.iam.gserviceaccount.com
 
 jobs:
@@ -56,7 +56,7 @@ jobs:
             --region "$REGION" \
             --project "$PROJECT_ID" \
             --service-account "$RUNTIME_SA" \
-            --set-env-vars "GOOGLE_CLOUD_PROJECT=${PROJECT_ID},GCS_BUCKET=${PROJECT_ID}-metadata-decoder,OAUTH_CLIENT_ID=${{ secrets.OAUTH_CLIENT_ID }},MA_ADMIN_EMAIL=${{ secrets.MA_ADMIN_EMAIL }},MAX_UPLOAD_BYTES=524288000" \
+            --set-env-vars "GOOGLE_CLOUD_PROJECT=${PROJECT_ID},GCS_BUCKET=${PROJECT_ID}-metadata-decoder,JWT_SECRET=${{ secrets.JWT_SECRET }},MA_ADMIN_EMAIL=${{ secrets.MA_ADMIN_EMAIL }},MAX_UPLOAD_BYTES=524288000" \
             --memory 4Gi \
             --quiet
 
